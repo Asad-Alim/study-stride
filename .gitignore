@@ -1,0 +1,11 @@
+# Real environment files — never commit these
+backend.env
+frontend.env
+
+# Dependency folders
+study stride/backend/node_modules/
+study stride/frontend/node_modules/
+
+# Uploaded PDFs
+study stride/backend/uploads/*
+!study stride/backend/uploads/gitignored
