@@ -11,8 +11,12 @@ const generateFlashcards = async (req, res) => {
     const existing = await Flashcard.find({ materialId: topicId, userId: req.user.id });
     if (existing.length > 0) return res.json(existing);
 
+    
     const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
+    if (!topic.combinedText || !topic.combinedText.trim()) {
+      return res.status(400).json({ message: 'No study material found for this topic. Please upload a file first.' });
+    }
 
     const generated = await gemini.generateFlashcards(topic.combinedText);
     const cards = await Flashcard.insertMany(

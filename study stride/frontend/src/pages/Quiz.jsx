@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import AppLayout from '../components/layout/AppLayout';
 import Button from '../components/common/Button';
@@ -7,6 +7,7 @@ import Loader from '../components/common/Loader';
 
 const Quiz = () => {
   const { materialId } = useParams();
+  const navigate = useNavigate();
   const [quiz, setQuiz] = useState(null);
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
@@ -24,9 +25,14 @@ const Quiz = () => {
 
   const handleGenerate = async () => {
     setGenerating(true);
-    const res = await api.post(`/quiz/${materialId}/generate`);
-    setQuiz(res.data);
-    setGenerating(false);
+    try {
+      const res = await api.post(`/quiz/${materialId}/generate`);
+      setQuiz(res.data);
+    } catch (err) {
+      console.error('Generate quiz failed', err);
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const handleAnswer = (idx, value) => setAnswers(a => ({ ...a, [idx]: value }));
@@ -58,7 +64,15 @@ const Quiz = () => {
     <AppLayout>
       <div className="p-8 max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-semibold text-[var(--text-primary)]">Quiz</h1>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors"
+            >
+              ← Back
+            </button>
+            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Quiz</h1>
+          </div>
           {!quiz && <Button loading={generating} onClick={handleGenerate}>Generate Quiz</Button>}
         </div>
 
@@ -79,7 +93,7 @@ const Quiz = () => {
                   <label key={j} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors ${
                     submitted
                       ? opt === q.correctAnswer
-                        ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+                        ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 font-medium'
                         : answers[i] === opt ? 'bg-red-50 dark:bg-red-900/20 text-red-600' : 'text-[var(--text-secondary)]'
                       : 'hover:bg-[var(--surface-2)] text-[var(--text-secondary)]'
                   }`}>
@@ -90,8 +104,14 @@ const Quiz = () => {
                       disabled={submitted}
                     />
                     {opt}
+                    {submitted && opt === q.correctAnswer && !answers[i] && (
+                      <span className="ml-auto text-xs text-green-600 dark:text-green-400">(correct answer)</span>
+                    )}
                   </label>
                 ))}
+                {submitted && !answers[i] && q.type === 'mcq' && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 italic">— Not attempted. Correct answer highlighted above.</p>
+                )}
 
                 {(q.type === 'short' || q.type === 'long' || q.type === 'descriptive') && (
                   <>
@@ -103,6 +123,12 @@ const Quiz = () => {
                       disabled={submitted}
                       className="w-full border border-[var(--border)] rounded-lg bg-[var(--surface-1)] text-[var(--text-primary)] px-3 py-2 text-sm resize-none focus:outline-none focus:border-[var(--accent)]"
                     />
+                    {submitted && !answers[i] && q.correctAnswer && (
+                      <div className="mt-2 p-3 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+                        <p className="text-xs font-medium text-green-700 dark:text-green-400 mb-1">Not attempted — Model Answer:</p>
+                        <p className="text-sm text-green-800 dark:text-green-300">{q.correctAnswer}</p>
+                      </div>
+                    )}
                     {submitted && (
                       <div>
                         <Button size="sm" variant="outline" loading={evalLoading === i} onClick={() => handleEvaluate(q, i)}>

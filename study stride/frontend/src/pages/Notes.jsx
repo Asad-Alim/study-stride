@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import AppLayout from '../components/layout/AppLayout';
 import NoteSection from '../components/notes/NoteSection';
@@ -8,6 +8,7 @@ import Loader from '../components/common/Loader';
 
 const Notes = () => {
   const { materialId } = useParams();
+  const navigate = useNavigate();
   const [allNotes, setAllNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   
@@ -55,7 +56,15 @@ const Notes = () => {
   return (
     <AppLayout>
       <div className="p-8 max-w-3xl mx-auto">
-        <h1 className="text-xl font-semibold text-[var(--text-primary)] mb-6">Notes</h1>
+        <div className="flex items-center gap-3 mb-6">
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors"
+          >
+            ← Back
+          </button>
+          <h1 className="text-xl font-semibold text-[var(--text-primary)]">Notes</h1>
+        </div>
         {allNotes.length === 0 ? (
           <p className="text-sm text-[var(--text-muted)]">No notes yet. Go to Learning Mode to generate notes for this topic.</p>
         ) : (
@@ -71,7 +80,7 @@ const Notes = () => {
                   )}
                 </div>
                 <div className="space-y-3">
-                  {notes.sections.map((section, i) => (
+                  {(notes.sections || []).map((section, i) => (
                     <NoteSection
                       key={i}
                       section={section}

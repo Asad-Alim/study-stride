@@ -2,6 +2,8 @@ const ConceptSection = require('../models/ConceptSection');
 const Topic = require('../models/Topic');
 const gemini = require('../services/geminiService');
 
+const User = require('../models/User');
+
 // :materialId param is actually a Topic id. combinedText already has every
 // uploaded file's text merged, so Gemini sees all of it in one call and
 // splits it into coherent concept sections — fixing the "topic split across
@@ -61,12 +63,14 @@ const chat = async (req, res) => {
     const section = await ConceptSection.findOne({ _id: req.params.id, userId: req.user.id });
     if (!section) return res.status(404).json({ message: 'Section not found' });
 
-    const topic = await Topic.findById(section.materialId);
+    // backend/controllers/sectionController.js, line 5 — DELETE this line:
+    // const user = await User.findById(req.user.id);
+    // const topic = await Topic.findById(section.materialId);
     const answer = await gemini.chatWithSection(
       section.rawContent,
       section.chatHistory,
       message,
-      topic?.declaredLevel
+      req.user.declaredLevel   // already in token payload — no extra DB fetch needed
     );
 
     section.chatHistory.push({ role: 'user', message });
@@ -85,11 +89,13 @@ const completeSection = async (req, res) => {
     const section = await ConceptSection.findOne({ _id: req.params.id, userId: req.user.id });
     if (!section) return res.status(404).json({ message: 'Section not found' });
 
-    const topic = await Topic.findById(section.materialId);
+    // const topic = await Topic.findById(section.materialId);
+    // // backend/controllers/sectionController.js, line 5 — DELETE this line:
+    // const user = await User.findById(req.user.id);
     const generated = await gemini.generateNotesFromChat(
       section.rawContent,
       section.chatHistory,
-      topic?.declaredLevel
+      req.user.declaredLevel
     );
 
     if (section.generatedNotes?.sections?.length > 0) {
@@ -113,6 +119,8 @@ const editSection = async (req, res) => {
     const section = await ConceptSection.findOne({ _id: req.params.id, userId: req.user.id });
     if (!section) return res.status(404).json({ message: 'Section not found' });
 
+
+    if (!section.generatedNotes?.sections) return res.status(400).json({ message: 'Section notes not generated yet' });
     const currentSection = section.generatedNotes.sections[sectionIndex];
     // FIX: previously no check here — an invalid sectionIndex crashed
     // with an unhandled exception instead of returning a clean error.

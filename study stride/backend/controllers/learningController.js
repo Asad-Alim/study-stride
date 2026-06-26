@@ -73,6 +73,7 @@ const askQuestion = async (req, res) => {
     const answer = await gemini.chatWithSection(pageContent, messages, question, declaredLevel, strictMode);
     res.json({ answer });
   } catch (err) {
+    console.error('askQuestion error:', err.message);
     res.status(500).json({ message: err.message });
   }
 };

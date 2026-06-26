@@ -8,6 +8,9 @@ const getOrGenerate = async (topicId, userId, type, generatorFn) => {
 
   const topic = await Topic.findById(topicId);
   if (!topic) throw new Error('Topic not found');
+  if (!topic.combinedText || !topic.combinedText.trim()) {
+    throw new Error('No study material found for this topic. Please upload a file first.');
+  }
 
   const content = await generatorFn(topic.combinedText);
   return await GeneratedContent.create({ materialId: topicId, userId, type, content });

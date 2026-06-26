@@ -117,6 +117,9 @@ export const AuthProvider = ({ children }) => {
     const updated = { ...user, lastUpgradePromptYear: new Date().getFullYear() };
     saveUser(updated);
     setShowUpgradePrompt(false);
+    if (!MOCK_MODE) {
+      api.put('/auth/profile', { lastUpgradePromptYear: updated.lastUpgradePromptYear }).catch(console.error);
+    }
   };
 
   const updateProfile = (fields) => {

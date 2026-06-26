@@ -39,12 +39,16 @@ const Upload = () => {
   const navigate = useNavigate();
 
   const handleFiles = (e) => {
-    const selected = Array.from(e.target.files);
-    if (selected.length > 0) {
-      setFiles(selected);
+  const selected = Array.from(e.target.files);
+  if (selected.length > 0) {
+    setFiles(prev => {
+      const merged = [...prev, ...selected];
       if (!title) setTitle(selected[0].name.replace(/\.[^.]+$/, ''));
-    }
-  };
+      return merged;
+    });
+    if (!title) setTitle(selected[0].name.replace(/\.[^.]+$/, ''));
+  }
+};
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -113,8 +117,15 @@ const Upload = () => {
   return (
     <AppLayout>
       <div className="p-8 max-w-2xl mx-auto">
-        <h1 className="text-xl font-semibold text-[var(--text-primary)] mb-6">Upload Material</h1>
-
+        <div className="flex items-center gap-3 mb-6">
+          <button
+            onClick={() => navigate(-1)}
+            className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors"
+          >
+            ← Back
+          </button>
+          <h1 className="text-xl font-semibold text-[var(--text-primary)]">Upload Material</h1>
+        </div>
         <div className="bg-[var(--surface-0)] border border-[var(--border)] rounded-xl p-8">
           {error && <div className="text-xs text-[var(--critical)] bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md mb-4">{error}</div>}
 

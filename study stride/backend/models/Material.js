@@ -9,7 +9,8 @@ const materialSchema = new mongoose.Schema({
   topicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Topic', required: true },
   title: { type: String, required: true },
   fileType: { type: String, enum: ['pdf', 'docx', 'txt'], required: true },
-  filePath: { type: String, required: true },
+  filePath: { type: String, required: true },       // Cloudinary secure URL
+  cloudinaryPublicId: { type: String, default: '' }, // for deletion via Cloudinary API
   extractedText: { type: String, required: true },
 }, { timestamps: true });
 

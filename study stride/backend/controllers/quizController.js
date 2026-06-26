@@ -9,7 +9,9 @@ const generateQuiz = async (req, res) => {
     const { materialId: topicId } = req.params;
     const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
-
+    if (!topic.combinedText || !topic.combinedText.trim()) {
+      return res.status(400).json({ message: 'No study material found for this topic. Please upload a file first.' });
+    }
     const generated = await gemini.generateQuiz(topic.combinedText);
 
     // Delete old quiz so every generate call gives fresh questions
@@ -45,7 +47,7 @@ const submitAttempt = async (req, res) => {
 const evaluateAnswer = async (req, res) => {
   try {
     const { question, studentAnswer, materialId: topicId } = req.body;
-    const topic = await Topic.findById(topicId);
+    const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
 
     const result = await gemini.evaluateAnswer(question, studentAnswer, topic.combinedText);

@@ -33,7 +33,7 @@ const register = async (req, res) => {
       photo: photo || null,
       classEnrolledAt: classEnrolledAt || null,
     });
-    const token = jwt.sign({ id: user._id, name: user.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id, name: user.name, declaredLevel: user.declaredLevel }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({ token, user: buildUserResponse(user) });
   } catch (err) {
@@ -50,7 +50,7 @@ const login = async (req, res) => {
     const match = await bcrypt.compare(password, user.passwordHash);
     if (!match) return res.status(401).json({ message: 'Invalid credentials' });
 
-    const token = jwt.sign({ id: user._id, name: user.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id, name: user.name, declaredLevel: user.declaredLevel }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user: buildUserResponse(user) });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -69,14 +69,24 @@ const getMe = async (req, res) => {
 
 // NEW — was missing entirely; AuthContext's updateProfile/upgradeClass call
 // PUT /auth/profile in real (non-mock) mode and had nowhere to land.
+// File: STUDY_STRIDE/study stride/backend/controllers/authController.js
+// Replace the updateProfileHandler function (lines ~68–81):
+
 const updateProfileHandler = async (req, res) => {
   try {
     const allowed = ['name', 'age', 'gender', 'declaredLevel', 'photo', 'classEnrolledAt', 'lastUpgradePromptYear', 'theme'];
+    const forbidden = ['password', 'passwordHash', 'email', '_id', 'id'];
     const updates = {};
     for (const key of allowed) {
-      if (req.body[key] !== undefined) updates[key] = req.body[key];
+      if (req.body[key] !== undefined) {
+        if (forbidden.includes(key)) continue; // safety double-check
+        updates[key] = req.body[key];
+      }
     }
-    const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true });
+    if (Object.keys(updates).length === 0)
+      return res.status(400).json({ message: 'No valid fields to update' });
+
+    const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true, runValidators: true });
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json(buildUserResponse(user));
   } catch (err) {

@@ -6,7 +6,9 @@ const generateNotes = async (req, res) => {
   try {
     const { materialId: topicId } = req.params;
 
-    const existing = await Notes.findOne({ materialId: topicId, pageNumber: 1, userId: req.user.id });
+    const page = parseInt(req.params.page) || 1;
+    const existing = await Notes.findOne({ materialId: topicId, pageNumber: page, userId: req.user.id });
+    // ... and pass `pageNumber: page` to Notes.create(...)
     if (existing) return res.json(existing);
 
     const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
@@ -19,7 +21,7 @@ const generateNotes = async (req, res) => {
     const notes = await Notes.create({
       materialId: topicId,
       userId: req.user.id,
-      pageNumber: 1,
+      pageNumber: page,
       sections: generated.sections,
       status: 'draft',
     });
@@ -33,7 +35,8 @@ const generateNotes = async (req, res) => {
 const getNotes = async (req, res) => {
   try {
     const { materialId: topicId } = req.params;
-    const notes = await Notes.findOne({ materialId: topicId, pageNumber: 1, userId: req.user.id });
+    const page = parseInt(req.params.page) || 1;
+    const notes = await Notes.findOne({ materialId: topicId, pageNumber: page, userId: req.user.id });
     if (!notes) return res.status(404).json({ message: 'Notes not found' });
     res.json(notes);
   } catch (err) {

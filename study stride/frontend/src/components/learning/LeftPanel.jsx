@@ -3,7 +3,7 @@ import useTextSelection from '../../hooks/useTextSelection';
 import TextSelectionMenu from './TextSelectionMenu';
 import Button from '../common/Button';
 
-const LeftPanel = ({ chunk, currentPage, totalPages, onPageChange, onExplainSelection, onNext }) => {
+const LeftPanel = ({ chunk, currentPage, totalPages, maxReachedPage = 1, onPageChange, onExplainSelection, onNext, fontSize = 15 }) => {
   const containerRef = useRef(null);
   const { selection, clear } = useTextSelection(containerRef);
 
@@ -15,6 +15,8 @@ const LeftPanel = ({ chunk, currentPage, totalPages, onPageChange, onExplainSele
   };
 
   const isLastPage = currentPage >= totalPages;
+  // Right arrow is blocked beyond maxReachedPage
+  const canGoRight = currentPage < maxReachedPage;
 
   return (
     <div className="flex flex-col h-full">
@@ -24,7 +26,13 @@ const LeftPanel = ({ chunk, currentPage, totalPages, onPageChange, onExplainSele
           <span className="text-xs text-[var(--text-muted)] font-mono">
             Page {currentPage} / {totalPages}
           </span>
-          <Button size="sm" variant="outline" onClick={() => onPageChange(currentPage + 1)} disabled={currentPage >= totalPages}>→</Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onPageChange(currentPage + 1)}
+            disabled={!canGoRight}
+            title={canGoRight ? 'Go to next page' : 'Use the Next button to unlock more pages'}
+          >→</Button>
         </div>
         <Button size="sm" variant="primary" onClick={onNext}>
           {isLastPage ? 'Finish Chapter →' : 'Next →'}
@@ -39,7 +47,7 @@ const LeftPanel = ({ chunk, currentPage, totalPages, onPageChange, onExplainSele
             onClose={clear}
           />
         )}
-        <div className="text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap font-mono text-xs leading-6 select-text">
+        <div className="text-[var(--text-primary)] whitespace-pre-wrap select-text leading-relaxed" style={{ fontSize: `${fontSize}px`, lineHeight: '1.75' }}>
           {chunk?.content || 'Loading page content…'}
         </div>
       </div>

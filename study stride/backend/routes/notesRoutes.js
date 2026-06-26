@@ -36,6 +36,34 @@ router.put('/:notesId/section/:sectionIndex', protect, updateSection);
 router.post('/:notesId/section/:sectionIndex/regenerate', protect, regenerateSection);
 router.put('/:notesId/approve', protect, approveNotes);
 
+// Save a single section's notes immediately after generation
+router.post('/:materialId/save-section', protect, async (req, res) => {
+  try {
+    const { pageNumber, content, heading } = req.body;
+    const topicId = req.params.materialId;
+
+    let notes = await Notes.findOne({ materialId: topicId, userId: req.user.id, pageNumber });
+    if (notes) {
+      notes.content = content;
+      notes.heading = heading;
+      notes.status = 'draft';
+      await notes.save();
+    } else {
+      notes = await Notes.create({
+        materialId: topicId,
+        userId: req.user.id,
+        pageNumber,
+        content,
+        sections: [{ heading: heading || `Section ${pageNumber}`, content, importance: 'general' }],
+        status: 'draft',
+      });
+    }
+    res.json(notes);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 router.post('/:materialId/save', protect, async (req, res) => {
   try {
     const { content, sections } = req.body;

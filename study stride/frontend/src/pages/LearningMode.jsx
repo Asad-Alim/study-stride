@@ -7,6 +7,23 @@ import RightPanel from '../components/learning/RightPanel';
 import ChatInput from '../components/learning/ChatInput';
 import Loader from '../components/common/Loader';
 
+
+// ADD AFTER LINE 8:
+const renderMarkdown = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/^### (.+)$/gm, '<h3 class="font-semibold text-sm mt-3 mb-1">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="font-semibold text-base mt-4 mb-1.5">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="font-bold text-base mt-4 mb-2">$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/(<li.*<\/li>\n?)+/g, '<ul class="space-y-0.5 my-1">$&</ul>')
+    .replace(/\n\n/g, '<br/><br/>')
+    .replace(/\n/g, '<br/>');
+};
+
+
 // const MOCK_MODE = true;
 const MOCK_MODE = false;
 
@@ -161,7 +178,7 @@ const UploadedNotesDrawer = ({ content, onClose }) => (
 
 // ─── Notes Panel (3rd panel) ──────────────────────────────────────────────────
 // Shows CUMULATIVE notes for all pages completed so far.
-const NotesPanel = ({ cumulativeNotes, currentNotes, generating, pageContent, learningMessages, declaredLevel, onManualGenerate, onNotesChange, newNotesBannerPage }) => {
+const NotesPanel = ({ cumulativeNotes, currentNotes, generating, pageContent, learningMessages, declaredLevel, onManualGenerate, onNotesChange, newNotesBannerPage, fontSize = 15 }) => {
   const [input, setInput] = useState('');
   const [updating, setUpdating] = useState(false);
   const bottomRef = useRef(null);
@@ -239,9 +256,9 @@ const NotesPanel = ({ cumulativeNotes, currentNotes, generating, pageContent, le
             <div className="px-3 py-2 bg-[var(--surface-1)] border-b border-[var(--border)]">
               <span className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">Page {page}</span>
             </div>
-            <div className="p-3 text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap">
-              {notes}
-            </div>
+            <div className="p-3 text-sm text-[var(--text-primary)] leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(notes) }}
+            />
           </div>
         ))}
 
@@ -303,9 +320,9 @@ const NotesReviewPopup = ({ notes, onNotesChange, pageNumber, pageContent, learn
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
-          <div className="text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap bg-[var(--surface-1)] rounded-xl p-4 border border-[var(--border)]">
-            {notes || 'No notes generated.'}
-          </div>
+          <div className="text-sm text-[var(--text-primary)] leading-relaxed bg-[var(--surface-1)] rounded-xl p-4 border border-[var(--border)]"
+            dangerouslySetInnerHTML={{ __html: notes ? renderMarkdown(notes) : 'No notes generated.' }}
+          />
         </div>
 
         <div className="px-6 py-3 border-t border-[var(--border)] bg-[var(--surface-0)] shrink-0">
@@ -374,9 +391,9 @@ const FinalNotesPopup = ({ allPageNotes, totalPages, onSave, onDiscard }) => {
 
         <div className="flex-1 overflow-y-auto p-6">
           {combined ? (
-            <div className="text-sm text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap bg-[var(--surface-1)] rounded-xl p-4 border border-[var(--border)]">
-              {combined}
-            </div>
+            <div className="text-sm text-[var(--text-primary)] leading-relaxed bg-[var(--surface-1)] rounded-xl p-4 border border-[var(--border)]"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(combined) }}
+            />
           ) : (
             <p className="text-xs text-[var(--text-muted)] text-center mt-8">No notes were generated this session.</p>
           )}
@@ -463,7 +480,7 @@ const FinalNotesPopup = ({ allPageNotes, totalPages, onSave, onDiscard }) => {
 //   );
 // };
 // Around line 414 — replace the entire QuizModal component
-const QuizModal = ({ materialId, onClose, onSkip, quizMode }) => {
+const QuizModal = ({ materialId, sectionContent, sectionHeading, declaredLevel, onClose, onSkip, quizMode }) => {
   const [quiz, setQuiz] = useState(null);
   const [answers, setAnswers] = useState({});
   const [submitted, setSubmitted] = useState(false);
@@ -472,11 +489,34 @@ const QuizModal = ({ materialId, onClose, onSkip, quizMode }) => {
 
   useEffect(() => {
     if (MOCK_MODE) { setQuiz({ questions: MOCK_QUIZ }); setLoading(false); return; }
-    api.get(`/quiz/${materialId}`)
-      .then(res => setQuiz(res.data))
-      .catch(() => setQuiz(null))
-      .finally(() => setLoading(false));
-  }, [materialId]);
+
+    if (quizMode === 'between') {
+      // Generate a fresh mini quiz from just this section's content
+      if (!sectionContent) { setLoading(false); return; }
+      api.post('/quiz/section-quiz', { sectionContent, sectionHeading, declaredLevel })
+        .then(res => setQuiz(res.data))
+        .catch(() => setQuiz(null))
+        .finally(() => setLoading(false));
+    } else {
+      // End-of-topic: use the full pre-generated quiz
+      api.get(`/quiz/${materialId}`)
+        .then(res => setQuiz(res.data))
+        .catch(() => {
+          // No quiz saved yet — generate one now
+          return api.post(`/quiz/${materialId}/generate`)
+            .then(res => setQuiz(res.data))
+            .catch(() => setQuiz(null));
+        })
+        .finally(() => setLoading(false));
+    }
+  }, [materialId, quizMode, sectionContent]);
+
+  // If quiz loaded but has no questions, auto-dismiss without showing popup
+  useEffect(() => {
+    if (!loading && (!quiz || !quiz.questions || quiz.questions.length === 0)) {
+      onSkip();
+    }
+  }, [loading, quiz, onSkip]);
 
   const handleSubmit = () => {
     let s = 0;
@@ -497,6 +537,7 @@ const QuizModal = ({ materialId, onClose, onSkip, quizMode }) => {
   );
 
   const questions = quiz?.questions || [];
+  if (questions.length === 0) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
@@ -559,6 +600,35 @@ const CollapseTab = ({ label, onClick }) => (
   </div>
 );
 
+
+// ADD BEFORE: const LearningMode = () => {
+const ChapterQuizPrompt = ({ onYes, onNo }) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div className="bg-[var(--surface-0)] border border-[var(--border)] rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 text-center">
+      <div className="text-3xl mb-3">🎓</div>
+      <h3 className="font-semibold text-[var(--text-primary)] text-base mb-2">Chapter Complete!</h3>
+      <p className="text-sm text-[var(--text-muted)] mb-5 leading-relaxed">
+        You've finished all sections. Would you like to take the full chapter quiz now?
+      </p>
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={onYes}
+          className="w-full py-2.5 rounded-xl bg-[var(--accent)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+        >
+          Yes, take the chapter quiz
+        </button>
+        <button
+          onClick={onNo}
+          className="w-full py-2.5 rounded-xl border border-[var(--border)] text-sm text-[var(--text-secondary)] hover:border-[var(--accent)] transition-colors"
+        >
+          No, go back to dashboard
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 const LearningMode = () => {
   const { materialId } = useParams();
@@ -567,6 +637,7 @@ const LearningMode = () => {
   const [material, setMaterial] = useState(null);
   const [chunk, setChunk] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [maxReachedPage, setMaxReachedPage] = useState(1);
   const [messages, setMessages] = useState([]);
   const [allPageMessages, setAllPageMessages] = useState({});
   const [loading, setLoading] = useState(false);
@@ -574,8 +645,10 @@ const LearningMode = () => {
   const [quizOpen, setQuizOpen] = useState(false);
   const [quizMode, setQuizMode] = useState('between');
   const [quizzesEnabled, setQuizzesEnabled] = useState(true);
+  const [fontSize, setFontSize] = useState(15);
   const [declaredLevel, setDeclaredLevel] = useState('General');
   const [strictDocMode, setStrictDocMode] = useState(true); // true = stick to uploaded docs only
+  
   
   // Notes state
   const [hasExistingNotes, setHasExistingNotes] = useState(null);
@@ -598,7 +671,9 @@ const LearningMode = () => {
   // UI state
   const [showReview, setShowReview] = useState(false);
   const [showFinalNotes, setShowFinalNotes] = useState(false);
+  const [showChapterQuizPrompt, setShowChapterQuizPrompt] = useState(false);
   const [nextTarget, setNextTarget] = useState(null);
+
 
   // Panel widths
   const [notesPct, setNotesPct] = useState(28);
@@ -761,6 +836,8 @@ const LearningMode = () => {
     const isLast = currentPage >= material.totalPages;
     const target = isLast ? 'end' : currentPage + 1;
     setNextTarget(target);
+    // Extend max reachable page
+    if (!isLast) setMaxReachedPage(prev => Math.max(prev, currentPage + 1));
 
     if (learnMode === 'learn_and_notes') {
       setGeneratingNotes(true);
@@ -776,12 +853,22 @@ const LearningMode = () => {
         setNewNotesBannerPage(currentPage);
         setTimeout(() => setNewNotesBannerPage(null), 4000);
         setAllPageMessages(prev => ({ ...prev, [currentPage]: savedMessages }));
+
+        // Auto-save this section's notes to backend immediately
+        if (!MOCK_MODE) {
+          api.post(`/notes/${materialId}/save-section`, {
+            pageNumber: currentPage,
+            content: notes,
+            heading: chunk?.heading || `Section ${currentPage}`,
+          }).catch(e => console.error('Notes save failed', e));
+        }
       } catch (e) {
         console.error('Notes generation on Next failed', e);
       } finally {
         setGeneratingNotes(false);
       }
-      setShowReview(true);
+      // Skip review popup — notes already visible in left panel. Go straight to next.
+      proceedToNext(target);
       return;
     }
 
@@ -790,11 +877,17 @@ const LearningMode = () => {
 
   const proceedToNext = (target) => {
     if (target === 'end') {
-      if (learnMode === 'learn_and_notes' && Object.keys(pageNotes).length > 0) {
+      // Show section quiz for the LAST section first (like any other section)
+      // then after that quiz, show final notes / chapter quiz prompt
+      if (quizzesEnabled) {
+        setQuizMode('between'); // section-specific quiz for the last page
+        setQuizOpen(true);
+        // flag that after this quiz we're actually done
+        setNextTarget('end_after_section_quiz');
+      } else if (learnMode === 'learn_and_notes' && Object.keys(pageNotes).length > 0) {
         setShowFinalNotes(true);
       } else {
-        setQuizMode('end');
-        setQuizOpen(true);
+        setShowChapterQuizPrompt(true);
       }
     } else if (quizzesEnabled) {
       setQuizMode('between');
@@ -818,24 +911,31 @@ const LearningMode = () => {
         .join('\n\n---\n\n');
       await api.post(`/notes/${materialId}/save`, { content: combined });
     }
-    setQuizMode('end');
-    setQuizOpen(true);
+    setShowChapterQuizPrompt(true);
   };
-  const handleFinalDiscard = () => { setShowFinalNotes(false); setQuizMode('end'); setQuizOpen(true); };
+  const handleFinalDiscard = () => { setShowFinalNotes(false); setShowChapterQuizPrompt(true); };
+
 
   const handleQuizClose = () => {
     setQuizOpen(false);
     if (quizMode === 'end') {
       navigate(`/material/${materialId}/quiz`);
-    } else {
-      setCurrentPage(nextTarget);
+    } else if (nextTarget === 'end_after_section_quiz') {    } else {
+      if (nextTarget !== null) setCurrentPage(nextTarget);
       setNextTarget(null);
     }
   };
   const handleQuizSkip = () => {
     setQuizOpen(false);
-    if (quizMode !== 'end') {
-      setCurrentPage(nextTarget);
+    if (nextTarget === 'end_after_section_quiz') {
+      if (learnMode === 'learn_and_notes' && Object.keys(pageNotes).length > 0) {
+        setShowFinalNotes(true);
+      } else {
+        setShowChapterQuizPrompt(true);
+      }
+      setNextTarget(null);
+    } else if (quizMode !== 'end') {
+      if (nextTarget !== null) setCurrentPage(nextTarget);
       setNextTarget(null);
     }
   };
@@ -880,8 +980,23 @@ const LearningMode = () => {
         />
       )}
 
-      {quizOpen && (
-        <QuizModal materialId={materialId} onClose={handleQuizClose} onSkip={handleQuizSkip} quizMode={quizMode} />
+      {showChapterQuizPrompt && (
+        <ChapterQuizPrompt
+          onYes={() => { setShowChapterQuizPrompt(false); setQuizMode('end'); setQuizOpen(true); }}
+          onNo={() => { setShowChapterQuizPrompt(false); navigate('/dashboard'); }}
+        />
+      )}
+
+      {quizOpen && materialId && (
+        <QuizModal
+          materialId={materialId}
+          sectionContent={chunk?.content || ''}
+          sectionHeading={chunk?.heading || ''}
+          declaredLevel={declaredLevel}
+          onClose={handleQuizClose}
+          onSkip={handleQuizSkip}
+          quizMode={quizMode}
+        />
       )}
 
       {generatingNotes && !showReview && (
@@ -897,12 +1012,32 @@ const LearningMode = () => {
         {/* Top bar */}
         <div className="border-b border-[var(--border)] bg-[var(--surface-0)] px-6 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors shrink-0"
+            >
+              ← Back
+            </button>
             <h2 className="font-medium text-sm text-[var(--text-primary)] truncate max-w-xs">{material.title}</h2>
             {isThreePanel && (
               <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded-full">📝 Learn + Notes</span>
             )}
           </div>
           <div className="flex items-center gap-3 text-xs">
+            {/* Font size controls */}
+            <div className="flex items-center gap-1 border border-[var(--border)] rounded-lg px-1.5 py-0.5">
+              <button
+                onClick={() => setFontSize(s => Math.max(11, s - 1))}
+                className="w-5 h-5 flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] font-bold text-xs"
+                title="Decrease font size"
+              >A-</button>
+              <span className="text-[var(--text-muted)] text-xs w-5 text-center">{fontSize}</span>
+              <button
+                onClick={() => setFontSize(s => Math.min(26, s + 1))}
+                className="w-5 h-5 flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] font-bold text-xs"
+                title="Increase font size"
+              >A+</button>
+            </div>
             {/* View Uploaded Notes — always visible in top bar */}
             <button
               onClick={() => setUploadedNotesPanelOpen(true)}
@@ -950,10 +1085,11 @@ const LearningMode = () => {
                     onNotesChange={setCurrentNotes}
                     generating={generatingNotes}
                     pageContent={chunk?.content || ''}
-                    learningMessages={messages}
+                    learningMessages={allPageMessages[currentPage] || messages}
                     declaredLevel={declaredLevel}
                     onManualGenerate={handleManualGenerateNotes}
                     newNotesBannerPage={newNotesBannerPage}
+                    fontSize={fontSize}
                   />
                 </div>
               )}
@@ -975,9 +1111,11 @@ const LearningMode = () => {
                       chunk={chunk}
                       currentPage={currentPage}
                       totalPages={material.totalPages}
+                      maxReachedPage={maxReachedPage}
                       onPageChange={setCurrentPage}
                       onExplainSelection={handleExplainSelection}
                       onNext={handleNext}
+                      fontSize={fontSize}
                     />
                   )}
                 </div>
@@ -998,7 +1136,7 @@ const LearningMode = () => {
                     </div>
                     <button onClick={() => setChatCollapsed(true)} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-0.5 rounded hover:bg-[var(--surface-2)] transition-colors">▶ Collapse</button>
                   </div>
-                  <RightPanel messages={messages} loading={loading} />
+                 <RightPanel messages={messages} loading={loading} fontSize={fontSize} />
                   <ChatInput onSend={handleAsk} disabled={loading} />
                 </div>
               )}
@@ -1019,9 +1157,11 @@ const LearningMode = () => {
                       chunk={chunk}
                       currentPage={currentPage}
                       totalPages={material.totalPages}
+                      maxReachedPage={maxReachedPage}
                       onPageChange={setCurrentPage}
                       onExplainSelection={handleExplainSelection}
                       onNext={handleNext}
+                      fontSize={fontSize}
                     />
                   )}
                 </div>
@@ -1038,7 +1178,7 @@ const LearningMode = () => {
                     <span className="text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider">💬 Ask AI</span>
                     <button onClick={() => setChatCollapsed(true)} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-0.5 rounded hover:bg-[var(--surface-2)] transition-colors">▶ Collapse</button>
                   </div>
-                  <RightPanel messages={messages} loading={loading} />
+                 <RightPanel messages={messages} loading={loading} fontSize={fontSize} />
                   <ChatInput onSend={handleAsk} disabled={loading} />
                 </div>
               )}

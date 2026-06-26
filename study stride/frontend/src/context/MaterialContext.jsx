@@ -35,11 +35,10 @@ export const MaterialProvider = ({ children }) => {
     const form = new FormData();
     const fileArray = Array.isArray(files) ? files : [files];
     fileArray.forEach(f => form.append('files', f));
-    form.append('topicId', topicId);
-    const res = await api.post('/materials', form, {
+    const res = await api.post(`/topics/${topicId}/add-material`, form, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
-    // Refresh topics
+    // Refresh topics list so UI shows new file count
     const updated = await api.get('/topics');
     setTopics(updated.data);
     return res.data;

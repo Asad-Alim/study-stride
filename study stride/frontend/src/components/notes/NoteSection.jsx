@@ -3,6 +3,21 @@ import ImportanceTag from '../common/ImportanceTag';
 import Button from '../common/Button';
 import api from '../../api/axios';
 
+// ADD AFTER LINE 4:
+const renderMarkdown = (text) => {
+  if (!text) return '';
+  return text
+    .replace(/^### (.+)$/gm, '<h3 class="font-semibold text-sm mt-3 mb-1">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="font-semibold text-base mt-4 mb-1.5">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="font-bold text-base mt-4 mb-2">$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/(<li.*<\/li>\n?)+/g, '<ul class="space-y-0.5 my-1">$&</ul>')
+    .replace(/\n\n/g, '<br/><br/>')
+    .replace(/\n/g, '<br/>');
+};
+
 const NoteSection = ({ section, index, notesId, onUpdate, onRegenerate }) => {
   const [editing, setEditing] = useState(false);
   const [feedback, setFeedback] = useState('');
@@ -40,7 +55,9 @@ const NoteSection = ({ section, index, notesId, onUpdate, onRegenerate }) => {
               className="w-full text-sm border border-[var(--border)] rounded bg-[var(--surface-1)] text-[var(--text-primary)] px-2.5 py-2 resize-none focus:outline-none focus:border-[var(--accent)]"
             />
           ) : (
-            <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{section.content}</p>
+            <div className="text-sm text-[var(--text-secondary)] leading-relaxed prose prose-sm dark:prose-invert max-w-none"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(section.content) }}
+            />
           )}
         </div>
         <div className="flex gap-1 shrink-0">

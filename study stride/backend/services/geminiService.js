@@ -1,14 +1,38 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const getModel = () => {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+const safeParseJSON = (raw, context = '') => {
+  const clean = raw.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(clean);
+  } catch (e) {
+    throw new Error(`Gemini returned invalid JSON${context ? ' for ' + context : ''}. Please try again.`);
+  }
 };
 
-const generate = async (prompt) => {
+
+
+const getModel = () => {
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+};
+
+const generate = async (prompt, retries = 3) => {
   const model = getModel();
-  const result = await model.generateContent(prompt);
-  return result.response.text();
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      return result.response.text();
+    } catch (err) {
+      const status = err.status || err.statusCode || err.httpStatusCode;
+      const isRetryable = status === 429 || status === 503 ||
+        err.message?.includes('503') || err.message?.includes('429') ||
+        err.message?.includes('high demand') || err.message?.includes('overloaded');
+      if (!isRetryable || attempt === retries) { console.error('Gemini error:', err); throw err; }
+      const delay = 2 ** attempt * 2000; // 2s, 4s, 8s
+      console.log(`Gemini ${status || 'error'} — retrying in ${delay/1000}s (attempt ${attempt + 1}/${retries})...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 };
 
 const explainPage = async (pageContent, question) => {
@@ -50,13 +74,12 @@ Return ONLY valid JSON in this exact format with no markdown, no backticks:
 {"sections":[{"heading":"Section heading","content":"Concise note content","importance":"critical"}]}
 
 importance must be one of: "critical", "important", "general"
-Generate 3-6 sections. Keep each section concise and exam-focused.
+Generate as many sections as needed — no fixed limit. Base the count on how many distinct concepts exist in the material. Each section must be complete, self-contained, and exam-focused.
 
 STUDY MATERIAL:
 ${pageContent}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'notes');
 };
 
 const regenerateSection = async (pageContent, heading, feedback) => {
@@ -72,8 +95,7 @@ STUDENT FEEDBACK: ${feedback}
 Return ONLY valid JSON with no markdown, no backticks:
 {"heading":"...","content":"...","importance":"critical"}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'regenerateSection');
 };
 
 const generateFlashcards = async (fullText) => {
@@ -83,10 +105,34 @@ const generateFlashcards = async (fullText) => {
 Generate 10-15 flashcards covering key concepts, definitions, and important facts.
 
 MATERIAL:
-${fullText.slice(0, 8000)}`;
+${fullText.slice(0, 40000)}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'flashcards');
+};
+
+
+// Mini quiz for between-section popup — only 2-5 MCQs from one section's content
+const generateSectionQuiz = async (sectionContent, sectionHeading, declaredLevel) => {
+  const wordCount = sectionContent.trim().split(/\s+/).length;
+  const questionCount = wordCount < 200 ? 2 : wordCount < 500 ? 3 : 5;
+
+  const prompt = `You are a teacher creating a quick comprehension check quiz.
+
+SECTION TOPIC: "${sectionHeading || 'Current Section'}"
+STUDENT LEVEL: ${declaredLevel || 'General'}
+
+Generate EXACTLY ${questionCount} MCQ questions based ONLY on the section content below.
+Do NOT include questions about topics outside this section.
+Each question must have exactly 4 options with one correct answer.
+
+Return ONLY valid JSON with no markdown, no backticks:
+{"questions":[{"type":"mcq","question":"...","options":["A","B","C","D"],"correctAnswer":"A","marks":1}]}
+
+SECTION CONTENT:
+${sectionContent.slice(0, 8000)}`;
+
+  const raw = await generate(prompt);
+  return safeParseJSON(raw, 'sectionQuiz');
 };
 
 const generateQuiz = async (fullText) => {
@@ -96,10 +142,9 @@ const generateQuiz = async (fullText) => {
 Generate 5 MCQs, 3 short, 2 long, 1 descriptive.
 
 MATERIAL:
-${fullText.slice(0, 8000)}`;
+${fullText.slice(0, 40000)}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'quiz');
 };
 
 const generateSummary = async (fullText) => {
@@ -107,10 +152,9 @@ const generateSummary = async (fullText) => {
 {"keyConcepts":["..."],"importantDefinitions":[{"term":"...","definition":"..."}],"examPoints":["..."]}
 
 MATERIAL:
-${fullText.slice(0, 8000)}`;
+${fullText.slice(0, 40000)}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'summary');
 };
 
 const generateRevisionSheet = async (fullText) => {
@@ -118,10 +162,9 @@ const generateRevisionSheet = async (fullText) => {
 {"quickRevision":["..."],"formulaSheet":["..."],"lastMinuteConcepts":["..."]}
 
 MATERIAL:
-${fullText.slice(0, 8000)}`;
+${fullText.slice(0, 40000)}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'revisionSheet');
 };
 
 const generateCheatSheet = async (fullText) => {
@@ -129,10 +172,9 @@ const generateCheatSheet = async (fullText) => {
 {"keywords":["..."],"formulae":["..."],"memoryTricks":["..."]}
 
 MATERIAL:
-${fullText.slice(0, 8000)}`;
+${fullText.slice(0, 40000)}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'cheatSheet');
 };
 
 const evaluateAnswer = async (question, studentAnswer, referenceContent) => {
@@ -150,8 +192,7 @@ ${referenceContent.slice(0, 3000)}
 Return ONLY valid JSON with no markdown, no backticks:
 {"score":8,"outOf":10,"feedback":"Detailed feedback string","missingPoints":["Point 1","Point 2"]}`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'evaluateAnswer');
 };
 
 // Learning Mode — split into concept sections adapted to student level.
@@ -162,6 +203,14 @@ const splitIntoLearningSections = async (fullText, declaredLevel, strictMode = t
     ? 'IMPORTANT: Base your sections STRICTLY on the provided material. Do not add information from outside the document.'
     : 'You may supplement the provided material with your own knowledge to fill gaps, but clearly derive section structure from the document.';
 
+  // Decide how many sections based on content size
+  const wordCount = fullText.trim().split(/\s+/).length;
+  let sectionGuidance;
+  if (wordCount < 400)        sectionGuidance = 'Generate 1-2 sections — the material is very short.';
+  else if (wordCount < 1500)  sectionGuidance = 'Generate 2-4 sections based on natural topic breaks.';
+  else if (wordCount < 5000)  sectionGuidance = 'Generate 4-8 sections based on natural topic breaks.';
+  else                         sectionGuidance = 'Generate 6-15 sections — split into clear concept groups.';
+
   const prompt = `You are an expert teacher. Split this study material into logical concept sections for a student at level: "${declaredLevel}".
 
 ${strictInstruction}
@@ -169,9 +218,10 @@ ${strictInstruction}
 Rules:
 - Each section must be a complete, self-contained concept a student can learn in one sitting.
 - Adapt depth and language to the student level. A Class 10 student needs simpler language than a B.Tech student.
-- If the same concept is scattered across the document (e.g. Application Layer mentioned on page 1 and page 9), MERGE it into one section.
-- Aim for 4-10 sections depending on content breadth.
-- Each section's content should be 150-400 words — enough to learn from, not overwhelming.
+- If the same concept is scattered across the document, MERGE it into one section.
+- ${sectionGuidance}
+- Each section's content should be 200-700 words. Do NOT cut a concept mid-way to fit a word limit.
+- Do NOT pad sections artificially. Only create a new section when there is a genuine topic change.
 
 Return ONLY valid JSON with no markdown, no backticks:
 {"sections":[{"heading":"Section Title","content":"Full section content written for the student's level","readingTime":3,"difficulty":"beginner"}]}
@@ -180,11 +230,13 @@ difficulty must be: "beginner", "intermediate", or "advanced"
 readingTime is estimated minutes.
 
 STUDY MATERIAL:
-${fullText.slice(0, 12000)}`;
+${fullText.slice(0, 60000)}`;
 
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  const parsed = JSON.parse(clean);
+  const parsed = safeParseJSON(raw, 'learningSections');
+  if (!parsed.sections || !Array.isArray(parsed.sections) || parsed.sections.length === 0) {
+    throw new Error('Gemini returned no sections. Please try again.');
+  }
   return parsed.sections;
 };
 
@@ -209,8 +261,7 @@ Return ONLY valid JSON with no markdown, no backticks:
 importance: "critical" (must-know for exam), "important" (supporting concept), "general" (background)
 Generate 3-6 concise, exam-focused sections.`;
   const raw = await generate(prompt);
-  const clean = raw.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  return safeParseJSON(raw, 'notesFromChat');
 };
 
 const chatWithSection = async (sectionContent, chatHistory, userMessage, declaredLevel, strictMode = true) => {
@@ -286,12 +337,31 @@ Return ONLY the updated notes in the same markdown format. No preamble, no expla
   return generate(prompt);
 };
 
+
+const splitIntoConceptSections = async (fullText) => {
+  const prompt = `You are an expert teacher. Split this study material into logical concept sections.
+
+Return ONLY valid JSON with no markdown, no backticks:
+{"sections":[{"heading":"Section Title","content":"Full section content","readingTime":3,"difficulty":"intermediate"}]}
+
+difficulty must be: "beginner", "intermediate", or "advanced"
+readingTime is estimated minutes to read.
+Generate as many sections as needed based on natural topic breaks.
+
+STUDY MATERIAL:
+${fullText.slice(0, 60000)}`;
+
+  const raw = await generate(prompt);
+  return safeParseJSON(raw, 'conceptSections');
+};
+
 module.exports = {
   explainPage,
   explainSelection,
   generateNotes,
   regenerateSection,
   generateFlashcards,
+  generateSectionQuiz,
   generateQuiz,
   generateSummary,
   generateRevisionSheet,
@@ -302,4 +372,5 @@ module.exports = {
   generateNotesFromChat,
   generateNotesFromLearning,
   updateNotesFromInstruction,
+  splitIntoConceptSections,
 };

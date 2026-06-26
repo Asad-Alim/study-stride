@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import AppLayout from '../components/layout/AppLayout';
 import Button from '../components/common/Button';
@@ -21,6 +21,7 @@ const Section = ({ title, items }) => (
 
 const GeneratedContent = () => {
   const { materialId } = useParams();
+  const navigate = useNavigate();
   const [active, setActive] = useState(null);
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(null);
@@ -110,7 +111,15 @@ const GeneratedContent = () => {
     <AppLayout>
       <div className="p-8 max-w-3xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-semibold text-[var(--text-primary)]">Study Materials</h1>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors"
+            >
+              ← Back
+            </button>
+            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Study Materials</h1>
+          </div>
           <div className="flex gap-2">
             <Link to={`/material/${materialId}/flashcards`}>
               <Button variant="outline" size="sm">Flashcards</Button>

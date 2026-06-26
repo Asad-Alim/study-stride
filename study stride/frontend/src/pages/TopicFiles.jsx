@@ -58,7 +58,7 @@ const TopicFiles = () => {
     <AppLayout>
       <div className="p-8 max-w-2xl mx-auto">
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate(-1)}
           className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] mb-6 flex items-center gap-1"
         >
           ← Back to Dashboard

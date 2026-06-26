@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import AppLayout from '../components/layout/AppLayout';
 import Button from '../components/common/Button';
 
@@ -18,6 +19,7 @@ const CLASS_OPTIONS = [
 
 const Profile = () => {
   const { user, updateProfile, logout } = useAuth();
+  const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     declaredLevel: user?.declaredLevel || '',
@@ -45,6 +47,12 @@ const Profile = () => {
   return (
     <AppLayout>
       <div className="p-8 max-w-lg mx-auto">
+         <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors mb-6"
+        >
+          ← Back
+        </button>
         <h1 className="text-xl font-semibold text-[var(--text-primary)] mb-6">Profile</h1>
 
         <div className="bg-[var(--surface-0)] border border-[var(--border)] rounded-2xl p-6 space-y-5">

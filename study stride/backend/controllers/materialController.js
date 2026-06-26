@@ -1,6 +1,7 @@
 const Material = require('../models/Material');
 const Topic = require('../models/Topic');
-const { extractText } = require('../services/fileService');
+const { extractTextFromBuffer } = require('../services/fileService');
+const { uploadBuffer, deleteFile } = require('../services/cloudinaryService');
 const path = require('path');
 
 // Rebuilds Topic.combinedText from every Material linked to it, each clearly
@@ -40,13 +41,20 @@ const uploadMaterial = async (req, res) => {
     const createdMaterials = [];
     for (const file of files) {
       const ext = path.extname(file.originalname).replace('.', '').toLowerCase();
-      const text = await extractText(file.path, ext);
+
+      // Extract text from memory buffer (no disk file)
+      const text = await extractTextFromBuffer(file.buffer, ext);
+
+      // Upload to Cloudinary
+      const cloudResult = await uploadBuffer(file.buffer, file.originalname);
+
       const material = await Material.create({
         userId: req.user.id,
         topicId: topic._id,
         title: req.body.title || file.originalname,
         fileType: ext,
-        filePath: file.path,
+        filePath: cloudResult.secure_url,
+        cloudinaryPublicId: cloudResult.public_id,
         extractedText: text,
       });
       createdMaterials.push(material);
@@ -84,13 +92,24 @@ const deleteMaterial = async (req, res) => {
   try {
     const material = await Material.findOne({ _id: req.params.id, userId: req.user.id });
     if (!material) return res.status(404).json({ message: 'Material not found' });
+
+    // Delete from Cloudinary (don't crash if it fails)
+    if (material.cloudinaryPublicId) {
+      await deleteFile(material.cloudinaryPublicId).catch(console.error);
+    }
+
     const topicId = material.topicId;
     await Material.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
+
+    // Rebuild combinedText from remaining files & reset cached learning sections
     await rebuildCombinedText(topicId);
+    await Topic.findByIdAndUpdate(topicId, { learningSections: [] });
+
     res.json({ message: 'Material deleted' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+
 
 module.exports = { uploadMaterial, getMaterials, getMaterial, deleteMaterial, rebuildCombinedText };

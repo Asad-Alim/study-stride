@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import AppLayout from '../components/layout/AppLayout';
 import Button from '../components/common/Button';
@@ -110,6 +110,7 @@ const FlashcardGrid = ({ cards }) => {
 
 const Flashcards = () => {
   const { materialId } = useParams();
+  const navigate = useNavigate();
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -122,23 +123,35 @@ const Flashcards = () => {
 
   const handleGenerate = async () => {
     setGenerating(true);
-    const res = await api.post(`/flashcards/${materialId}/generate`);
-    setCards(res.data);
-    setGenerating(false);
+    try {
+      const res = await api.post(`/flashcards/${materialId}/generate`);
+      setCards(res.data);
+    } catch (err) {
+      console.error('Generate flashcards failed', err);
+    } finally {
+      setGenerating(false);
+    }
   };
-
   if (loading) return <AppLayout><Loader /></AppLayout>;
 
   return (
     <AppLayout>
       <div className="p-8 max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-xl font-semibold text-[var(--text-primary)]">Flashcards</h1>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] px-2 py-1 rounded-lg hover:bg-[var(--surface-2)] transition-colors"
+            >
+              ← Back
+            </button>
+            <div>
+              <h1 className="text-xl font-semibold text-[var(--text-primary)]">Flashcards</h1>
             {cards.length > 0 && (
               <p className="text-xs text-[var(--text-muted)] mt-0.5">{cards.length} cards — tap any card to reveal its answer</p>
             )}
           </div>
+        </div>
           {cards.length === 0 && (
             <Button loading={generating} onClick={handleGenerate}>Generate Flashcards</Button>
           )}
