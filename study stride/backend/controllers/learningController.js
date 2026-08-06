@@ -1,6 +1,11 @@
 // PATH: backend/controllers/learningController.js
 const Topic = require('../models/Topic');
+const Chunk = require('../models/Chunk');
 const gemini = require('../services/geminiService');
+const { embedText } = require('../services/embeddingService');
+const { searchByTopic } = require('../services/vectorSearchService');
+
+
 
 // Split the topic's combined text into logical concept sections using Gemini.
 // Each section = one "page" in the learning UI.
@@ -69,8 +74,24 @@ const regenerateSections = async (req, res) => {
 
 const askQuestion = async (req, res) => {
   try {
-    const { pageContent, messages, question, declaredLevel, strictMode } = req.body;
-    const answer = await gemini.chatWithSection(pageContent, messages, question, declaredLevel, strictMode);
+    const { pageContent, messages, question, declaredLevel, strictMode, topicId } = req.body;
+
+    let contextContent = pageContent;
+    if (topicId) {
+      const chunkCount = await Chunk.countDocuments({ topicId });
+      if (chunkCount > 0) {
+        const queryEmbedding = await embedText(question, 'RETRIEVAL_QUERY');
+        const results = await searchByTopic(topicId, queryEmbedding, 5);
+        if (results.length > 0) {
+          const retrieved = results.map(r => r.text).join('\n\n---\n\n');
+          // Keep current page as primary context, retrieved chunks as extra
+          // material — this handles doubts about earlier/later pages too.
+          contextContent = `${pageContent}\n\n--- RELATED MATERIAL FROM OTHER PAGES IN THIS TOPIC ---\n\n${retrieved}`;
+        }
+      }
+    }
+
+    const answer = await gemini.chatWithSection(contextContent, messages, question, declaredLevel, strictMode);
     res.json({ answer });
   } catch (err) {
     console.error('askQuestion error:', err.message);

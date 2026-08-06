@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { generateNotes, getNotes, getAllNotes, generateAndGetNotes, updateSection, regenerateSection, approveNotes } = require('../controllers/notesController');
+const { generateNotes, getNotes, getAllNotes, generateAndGetNotes, updateSection, regenerateSection, approveNotes, generateNextNotesBatch, notesQueueStatus } = require('../controllers/notesController');
 const { protect } = require('../middleware/authMiddleware');
 const Notes = require('../models/Notes');
 const gemini = require('../services/geminiService');
@@ -35,6 +35,11 @@ router.get('/:materialId/all', protect, getAllNotes);
 router.put('/:notesId/section/:sectionIndex', protect, updateSection);
 router.post('/:notesId/section/:sectionIndex/regenerate', protect, regenerateSection);
 router.put('/:notesId/approve', protect, approveNotes);
+
+// Queue-based notes generation (item 10/11) — independent progress from
+// learning sections' generate-next-batch.
+router.post('/:topicId/generate-next-batch', protect, generateNextNotesBatch);
+router.get('/:topicId/queue-status', protect, notesQueueStatus);
 
 // Save a single section's notes immediately after generation
 router.post('/:materialId/save-section', protect, async (req, res) => {

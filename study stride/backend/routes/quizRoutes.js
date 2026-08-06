@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { generateQuiz, getQuiz, submitAttempt, evaluateAnswer } = require('../controllers/quizController');
 const { protect } = require('../middleware/authMiddleware');
+const { generationLimiter } = require('../middleware/rateLimitMiddleware');
 const gemini = require('../services/geminiService');
 
 router.post('/attempt', protect, submitAttempt);
 router.post('/evaluate', protect, evaluateAnswer);
 
 // NEW: generate a mini quiz from just one section's content (between-section popup)
-router.post('/section-quiz', protect, async (req, res) => {
+router.post('/section-quiz', protect, generationLimiter, async (req, res) => {
   try {
     const { sectionContent, sectionHeading, declaredLevel } = req.body;
     if (!sectionContent) return res.status(400).json({ message: 'sectionContent required' });
@@ -19,7 +20,7 @@ router.post('/section-quiz', protect, async (req, res) => {
   }
 });
 
-router.post('/:materialId/generate', protect, generateQuiz);
+router.post('/:materialId/generate', protect, generationLimiter, generateQuiz);
 router.get('/:materialId', protect, getQuiz);
 
 module.exports = router;

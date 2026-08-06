@@ -1,8 +1,19 @@
 const Material = require('../models/Material');
+const Chunk = require('../models/Chunk');
+const ConceptSection = require('../models/ConceptSection');
+
 const Topic = require('../models/Topic');
 const { extractTextFromBuffer } = require('../services/fileService');
-const { uploadBuffer, deleteFile } = require('../services/cloudinaryService');
 const path = require('path');
+
+const { uploadBuffer, deleteFile } = require('../services/cloudinaryService');
+const { ingestMaterial } = require('../services/ragService');
+
+// extractedText was removed from the Material model (it was a full
+// duplicate of pages[].text). This reconstructs the same joined string
+// on demand from pages.
+const joinedMaterialText = (material) =>
+  (material.pages || []).map(p => p.text).join('\n\n');
 
 // Rebuilds Topic.combinedText from every Material linked to it, each clearly
 // labelled so Gemini can tell which upload a passage came from (helps it
@@ -10,7 +21,7 @@ const path = require('path');
 const rebuildCombinedText = async (topicId) => {
   const materials = await Material.find({ topicId }).sort({ createdAt: 1 });
   const combinedText = materials
-    .map((m, i) => `\n\n===== Source ${i + 1}: ${m.title} =====\n\n${m.extractedText}`)
+    .map((m, i) => `\n\n===== Source ${i + 1}: ${m.title} =====\n\n${joinedMaterialText(m)}`)
     .join('');
   await Topic.findByIdAndUpdate(topicId, {
     combinedText,
@@ -42,10 +53,8 @@ const uploadMaterial = async (req, res) => {
     for (const file of files) {
       const ext = path.extname(file.originalname).replace('.', '').toLowerCase();
 
-      // Extract text from memory buffer (no disk file)
-      const text = await extractTextFromBuffer(file.buffer, ext);
+      const { pages } = await extractTextFromBuffer(file.buffer, ext);
 
-      // Upload to Cloudinary
       const cloudResult = await uploadBuffer(file.buffer, file.originalname);
 
       const material = await Material.create({
@@ -55,11 +64,22 @@ const uploadMaterial = async (req, res) => {
         fileType: ext,
         filePath: cloudResult.secure_url,
         cloudinaryPublicId: cloudResult.public_id,
-        extractedText: text,
+        pages,
+        totalPages: pages.length,
+        totalChars: pages.reduce((sum, p) => sum + p.charCount, 0),
+        pagesProcessed: 0,
       });
       createdMaterials.push(material);
+
+      // Chunk + embed immediately, decoupled from concept-section generation
+      // pacing (design doc §5.2). Does NOT touch ConceptSections.
+      ingestMaterial(material).catch(err => console.error('ingestMaterial error:', err));
     }
 
+    // combinedText still backs other features (flashcards/quiz/notes/legacy
+    // learning mode) — keep it in sync. It is NOT the generation input for
+    // concept sections anymore, and existing ConceptSections/queue progress
+    // are left completely untouched (this is the core "no nuke" fix).
     await rebuildCombinedText(topic._id);
     const updatedTopic = await Topic.findById(topic._id);
 
@@ -71,7 +91,7 @@ const uploadMaterial = async (req, res) => {
 
 const getMaterials = async (req, res) => {
   try {
-    const materials = await Material.find({ userId: req.user.id }).sort({ createdAt: -1 }).select('-extractedText');
+    const materials = await Material.find({ userId: req.user.id }).sort({ createdAt: -1 });
     res.json(materials);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -93,17 +113,56 @@ const deleteMaterial = async (req, res) => {
     const material = await Material.findOne({ _id: req.params.id, userId: req.user.id });
     if (!material) return res.status(404).json({ message: 'Material not found' });
 
-    // Delete from Cloudinary (don't crash if it fails)
     if (material.cloudinaryPublicId) {
       await deleteFile(material.cloudinaryPublicId).catch(console.error);
     }
 
-    const topicId = material.topicId;
-    await Material.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
+    const topic = await Topic.findById(material.topicId);
 
-    // Rebuild combinedText from remaining files & reset cached learning sections
-    await rebuildCombinedText(topicId);
-    await Topic.findByIdAndUpdate(topicId, { learningSections: [] });
+   // Which concept tags were introduced ONLY by this material? Keep the full
+    // {tag, oneLiner} objects — before conceptIndex gets filtered below —
+    // since Gemini needs the oneLiner text, not just the tag, to regenerate.
+    const orphanedConceptObjs = topic.conceptIndex.filter(
+      c => String(c.introducedByMaterialId) === String(material._id)
+    );
+
+    // Flag sections elsewhere that assumed those tags were already taught,
+    // and record exactly which concepts each individual section needs to relearn.
+    if (orphanedConceptObjs.length) {
+      const staleSections = await ConceptSection.find({
+        topicId: topic._id,
+        assumedPriorConcepts: { $in: orphanedConceptObjs.map(c => c.tag) },
+      });
+
+      for (const section of staleSections) {
+        const relevantOrphans = orphanedConceptObjs.filter(c => section.assumedPriorConcepts.includes(c.tag));
+        section.assumptionsStale = true;
+        section.staleReason = `Assumes background material from "${material.title}", which was deleted.`;
+        section.orphanedConcepts = relevantOrphans.map(c => ({ tag: c.tag, oneLiner: c.oneLiner }));
+        await section.save();
+      }
+    }
+
+    // Delete Chunks that belong purely to this material.
+    await Chunk.deleteMany({ materialId: material._id });
+
+    // Delete ConceptSections generated PURELY from this material's pages.
+    await ConceptSection.deleteMany({ topicId: topic._id, sourceMaterialIds: [material._id] });
+
+    // Cross-material sections can't be cleanly split — flag instead of
+    // deleting or silently leaving stale content.
+    await ConceptSection.updateMany(
+      { topicId: topic._id, sourceMaterialIds: material._id, 'sourceMaterialIds.1': { $exists: true } },
+      { assumptionsStale: true, staleReason: `Was generated partly from "${material.title}", which was deleted. Consider regenerating.` }
+    );
+
+    topic.conceptIndex = topic.conceptIndex.filter(c => String(c.introducedByMaterialId) !== String(material._id));
+    await topic.save();
+
+    await Material.findByIdAndDelete(material._id);
+
+    // combinedText still backs other features — keep it in sync.
+    await rebuildCombinedText(topic._id);
 
     res.json({ message: 'Material deleted' });
   } catch (err) {
@@ -112,4 +171,4 @@ const deleteMaterial = async (req, res) => {
 };
 
 
-module.exports = { uploadMaterial, getMaterials, getMaterial, deleteMaterial, rebuildCombinedText };
+module.exports = { uploadMaterial, getMaterials, getMaterial, deleteMaterial, rebuildCombinedText, joinedMaterialText };

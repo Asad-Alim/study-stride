@@ -1,6 +1,7 @@
 const Notes = require('../models/Notes');
 const Topic = require('../models/Topic');
 const gemini = require('../services/geminiService');
+const { getPendingQueue, takeBatch, advancePagesProcessed } = require('../services/queueService');
 
 const generateNotes = async (req, res) => {
   try {
@@ -135,4 +136,62 @@ const generateAndGetNotes = async (req, res) => {
   }
 };
 
-module.exports = { generateNotes, getNotes, getAllNotes, generateAndGetNotes, updateSection, regenerateSection, approveNotes };
+// Pulls one batch off the topic's notes-specific pending queue — an
+// independent progress counter from learning sections (Material.notesPagesProcessed),
+// so a topic can be ahead on notes and behind on sections or vice versa.
+// Only advances the queue pointer if generation + save succeed (design doc item 10).
+const generateNextNotesBatch = async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
+    if (!topic) return res.status(404).json({ message: 'Topic not found' });
+
+    const queue = await getPendingQueue(topic._id, 'notesPagesProcessed');
+    if (queue.length === 0) return res.status(400).json({ message: 'Nothing left to generate' });
+
+    const batch = takeBatch(queue, { maxChars: 15000, maxPages: 15 });
+    const alreadyTaught = topic.conceptIndex.map(c => c.oneLiner);
+
+    let generated;
+    try {
+      generated = await gemini.generateNotes(batch.labeledText, alreadyTaught);
+    } catch (err) {
+      console.error('generateNextNotesBatch Gemini error:', err);
+      return res.status(503).json({ code: 'GEMINI_UNAVAILABLE', message: 'AI generation is temporarily unavailable. Please try again.' });
+    }
+
+    const nextPageNumber = (await Notes.countDocuments({ materialId: topic._id, userId: req.user.id })) + 1;
+    const notes = await Notes.create({
+      materialId: topic._id,
+      userId: req.user.id,
+      pageNumber: nextPageNumber,
+      sections: generated.sections,
+      status: 'draft',
+    });
+
+    // Only advance the queue pointer now that generation + persistence succeeded.
+    await advancePagesProcessed(batch, 'notesPagesProcessed');
+
+    res.status(201).json(notes);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Progress info for the notes queue. Powers the "generate the rest" entry
+// point (item 11) and the new-material heads-up popup (item 12/13) — the
+// popup itself must not show these numbers, but the underlying hasMore/
+// pagesRemaining check is what decides whether to show it at all.
+const notesQueueStatus = async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
+    if (!topic) return res.status(404).json({ message: 'Topic not found' });
+    const queue = await getPendingQueue(topic._id, 'notesPagesProcessed');
+    res.json({ hasMore: queue.length > 0, pagesRemaining: queue.length });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { generateNotes, getNotes, getAllNotes, generateAndGetNotes, updateSection, regenerateSection, approveNotes, generateNextNotesBatch, notesQueueStatus };

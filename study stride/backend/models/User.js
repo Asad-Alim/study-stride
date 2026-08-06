@@ -11,6 +11,7 @@ const userSchema = new mongoose.Schema({
   classEnrolledAt: { type: Date, default: null },
   lastUpgradePromptYear: { type: Number, default: null },
   theme: { type: String, enum: ['light', 'dark'], default: 'light' },
+  tokenVersion: { type: Number, default: 0 },
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema);

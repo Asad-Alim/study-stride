@@ -67,8 +67,15 @@ Provide a helpful, focused response.`;
   return generate(prompt);
 };
 
-const generateNotes = async (pageContent) => {
+const generateNotes = async (pageContent, alreadyTaughtOneLiners = []) => {
+  // Same "don't re-teach covered ground" context that generateBatchSections
+  // already gives learning sections — item 11 wants notes to carry this too.
+  const alreadyTaughtBlock = alreadyTaughtOneLiners.length
+    ? `\n\nTHE STUDENT HAS ALREADY BEEN TAUGHT THE FOLLOWING (do not re-explain these from scratch, only reference briefly if relevant):\n${alreadyTaughtOneLiners.map(l => `- ${l}`).join('\n')}`
+    : '';
+
   const prompt = `You are an expert note-maker. Generate structured, exam-oriented notes from the following study material.
+${alreadyTaughtBlock}
 
 Return ONLY valid JSON in this exact format with no markdown, no backticks:
 {"sections":[{"heading":"Section heading","content":"Concise note content","importance":"critical"}]}
@@ -82,20 +89,43 @@ ${pageContent}`;
   return safeParseJSON(raw, 'notes');
 };
 
-const regenerateSection = async (pageContent, heading, feedback) => {
-  const prompt = `Regenerate this note section based on the student's feedback.
+// currentBlockContent: the note block's existing text (what the student sees right now)
+// sourceContent: the section's underlying material, for grounding/facts
+const regenerateSection = async (currentBlockContent, sourceContent, heading, feedback) => {
+  const prompt = `You are editing one block of a student's notes based on their instruction.
 
-PAGE CONTENT:
-${pageContent}
+CURRENT NOTE BLOCK ("${heading}"):
+${currentBlockContent}
 
-CURRENT HEADING: ${heading}
+UNDERLYING SECTION MATERIAL (for facts/context, don't just re-summarize this):
+${sourceContent}
 
-STUDENT FEEDBACK: ${feedback}
+STUDENT'S INSTRUCTION: ${feedback}
+
+Apply the instruction to the CURRENT NOTE BLOCK above — keep everything that
+instruction doesn't ask you to change. Do not regenerate the block from
+scratch.
 
 Return ONLY valid JSON with no markdown, no backticks:
 {"heading":"...","content":"...","importance":"critical"}`;
   const raw = await generate(prompt);
   return safeParseJSON(raw, 'regenerateSection');
+};
+
+const regenerateWithMissingPrerequisites = async (currentContent, heading, orphanedConcepts) => {
+  const missingBlock = orphanedConcepts.map(c => `- ${c.oneLiner}`).join('\n');
+  const prompt = `You are revising a study section because some background material it relied on was removed from the course.
+
+CURRENT SECTION ("${heading}"):
+${currentContent}
+
+THE FOLLOWING CONCEPTS WERE ASSUMED KNOWN BUT ARE NO LONGER TAUGHT ANYWHERE ELSE — teach them briefly inline (a short paragraph each is enough), then continue with the section's existing content adjusted so it no longer assumes them:
+${missingBlock}
+
+Return ONLY valid JSON with no markdown, no backticks:
+{"content":"...","conceptTags":[{"tag":"...","oneLiner":"..."}]}`;
+  const raw = await generate(prompt);
+  return safeParseJSON(raw, 'regenerateWithMissingPrerequisites');
 };
 
 const generateFlashcards = async (fullText) => {
@@ -264,11 +294,11 @@ Generate 3-6 concise, exam-focused sections.`;
   return safeParseJSON(raw, 'notesFromChat');
 };
 
-const chatWithSection = async (sectionContent, chatHistory, userMessage, declaredLevel, strictMode = true) => {
+ const chatWithSection = async (sectionContent, chatHistory, userMessage, declaredLevel, strictMode = true) => {
   const history = chatHistory.map(m => `${m.role === 'user' ? 'Student' : 'AI'}: ${m.message || m.content}`).join('\n');
   const strictInstruction = strictMode
-    ? 'Answer ONLY based on the section content provided. Do not bring in outside knowledge.'
-    : 'Use the section content as the primary source. You may use your broader knowledge to clarify or fill gaps.';
+    ? 'STRICT MODE: Answer ONLY using the section content provided below. Do not bring in outside knowledge. If the student asks something the section content does not cover or contradicts, say so explicitly (e.g. "This isn\'t covered in the provided material.") instead of guessing or filling the gap from general knowledge.'
+    : 'Use the section content as the primary source. You may use your broader knowledge to clarify or fill gaps — but if you do, make clear which parts come from the material and which are your own addition.';
 
   const prompt = `You are a helpful AI tutor explaining a concept to a student at level: "${declaredLevel || 'General'}".
 
@@ -338,6 +368,68 @@ Return ONLY the updated notes in the same markdown format. No preamble, no expla
 };
 
 
+
+// Replaces the direct splitIntoConceptSections(topic.combinedText) call.
+// Batch is text labeled by source; alreadyTaughtOneLiners keeps Gemini from
+// re-teaching covered ground; dedupNotes surfaces contradictions explicitly.
+// strictMode=true: sections must be built ONLY from batchText; anything Gemini
+// isn't sure is grounded in the source must be flagged, not silently included.
+// strictMode=false: Gemini may supplement with its own knowledge to fill gaps.
+const generateBatchSections = async (batchText, alreadyTaughtOneLiners, dedupNotes, pagingContext = {}, strictMode = true) => {
+  const alreadyTaughtBlock = alreadyTaughtOneLiners.length
+    ? `\n\nTHE STUDENT HAS ALREADY BEEN TAUGHT (do not re-explain these from scratch):\n${alreadyTaughtOneLiners.map(l => `- ${l}`).join('\n')}`
+    : '';
+
+  const contradictionBlock = dedupNotes?.contradictions?.length
+    ? `\n\nCONTRADICTIONS TO SURFACE EXPLICITLY (earlier material said one thing, this source says another — call this out for the student, don't silently pick one):\n${dedupNotes.contradictions.map((c, i) => `${i + 1}. Earlier: "${c.existing.slice(0, 200)}" vs New: "${c.incoming.slice(0, 200)}"`).join('\n')}`
+    : '';
+
+  const pacingBlock = pagingContext?.pagesRemainingAfterThis > 0
+    ? `\n\nPACING: This batch is only PART of a larger document — roughly ${pagingContext.pagesRemainingAfterThis} more page(s) of source material are still to come after this batch, in later batches. Only teach what THIS batch's content actually contains. Do not try to preview, summarize, or front-load topics you expect to appear later — later batches will cover them properly when their content arrives. Do not pad this batch's sections with generic background to compensate for not having the rest of the document yet.`
+    : `\n\nPACING: This is the FINAL batch — there is no more source material coming after this one.`;
+
+  const strictBlock = strictMode
+    ? `\n\nSTRICT MODE: Base every section STRICTLY on the BATCH CONTENT below. Do not add facts, examples, or explanations from outside the provided text. If explaining a concept properly would require information the batch content doesn't contain, say so within the section (e.g. "The source material doesn't elaborate on X") instead of inventing or assuming it.`
+    : `\n\nThe batch content is the primary source, but you may supplement with your own knowledge to fill gaps or add clarifying context where the material is thin — keep the section structure driven by the document itself.`;
+
+  const prompt = `You are an expert teacher. Split this study material batch into logical concept sections.
+${alreadyTaughtBlock}
+${contradictionBlock}
+${pacingBlock}
+${strictBlock}
+
+Rules:
+- Each section must be a complete, self-contained concept.
+- For each section, return conceptTags describing the SPECIFIC claims taught, not topic labels.
+  Bad:  {"tag":"JWT","oneLiner":"JSON Web Tokens for auth"}
+  Good: {"tag":"JWT storage — localStorage","oneLiner":"storing JWT in localStorage after login"}
+- If a contradiction was flagged above, write the section so it explains the discrepancy to the student rather than silently picking one version.
+
+Return ONLY valid JSON with no markdown, no backticks:
+{"sections":[{"heading":"...","content":"...","readingTime":3,"difficulty":"intermediate","conceptTags":[{"tag":"...","oneLiner":"..."}]}]}
+
+BATCH CONTENT:
+${batchText}`;
+
+  const raw = await generate(prompt);
+  return safeParseJSON(raw, 'batchSections');
+};
+
+// Stage 2 dedup classification (design doc §7.2).
+const classifyPassagePair = async (passageA, passageB) => {
+  const prompt = `PASSAGE A (already taught): ${passageA.slice(0, 1500)}
+
+PASSAGE B (new): ${passageB.slice(0, 1500)}
+
+Classify the relationship between B and A as exactly one word: DUPLICATE, EXTENSION, DISTINCT_SUBTOPIC, or CONTRADICTION.
+Return ONLY that one word, nothing else.`;
+
+  const raw = await generate(prompt);
+  const verdict = raw.trim().toUpperCase();
+  const valid = ['DUPLICATE', 'EXTENSION', 'DISTINCT_SUBTOPIC', 'CONTRADICTION'];
+  return valid.includes(verdict) ? verdict : 'DISTINCT_SUBTOPIC';
+};
+
 const splitIntoConceptSections = async (fullText) => {
   const prompt = `You are an expert teacher. Split this study material into logical concept sections.
 
@@ -360,6 +452,7 @@ module.exports = {
   explainSelection,
   generateNotes,
   regenerateSection,
+  regenerateWithMissingPrerequisites,
   generateFlashcards,
   generateSectionQuiz,
   generateQuiz,
@@ -373,4 +466,6 @@ module.exports = {
   generateNotesFromLearning,
   updateNotesFromInstruction,
   splitIntoConceptSections,
+  generateBatchSections,
+  classifyPassagePair,
 };

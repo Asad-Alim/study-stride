@@ -6,6 +6,7 @@ import { NavLink, Link } from 'react-router-dom';
 const nav = [
   { to: '/dashboard', icon: '⊞', label: 'Dashboard' },
   { to: '/upload', icon: '↑', label: 'Upload' },
+  { to: '/chat', icon: '💬', label: 'Ask Anything' },
 ];
 
 const Sidebar = ({ collapsed, onToggle }) => {

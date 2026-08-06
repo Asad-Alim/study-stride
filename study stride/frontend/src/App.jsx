@@ -14,6 +14,7 @@ import Flashcards from './pages/Flashcards';
 import Quiz from './pages/Quiz';
 import GeneratedContent from './pages/GeneratedContent';
 import Profile from './pages/Profile';
+import HomeChat from './pages/HomeChat';
 import Loader from './components/common/Loader';
 
 const Protected = ({ children }) => {
@@ -34,7 +35,10 @@ const AppRoutes = () => (
     <Route path="/material/:materialId/flashcards" element={<Protected><Flashcards /></Protected>} />
     <Route path="/material/:materialId/quiz" element={<Protected><Quiz /></Protected>} />
     <Route path="/material/:materialId/generate" element={<Protected><GeneratedContent /></Protected>} />
+    
+    
     <Route path="/profile" element={<Protected><Profile /></Protected>} />
+    <Route path="/chat" element={<Protected><HomeChat /></Protected>} />
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes>
 );

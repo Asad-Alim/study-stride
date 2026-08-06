@@ -4,7 +4,7 @@ An AI-powered adaptive learning platform built on the MERN stack with Google Gem
  
 ## What It Does
  
-Study Stride lets students upload their study material (PDF, DOCX, or TXT) and learn from it through an AI-powered interface. The platform adapts explanations to the student's education level and generates notes, flashcards, quizzes, summaries, and cheat sheets from their content. Files are stored on Cloudinary; text extraction and all AI generation happen server-side.
+Study Stride lets students upload their study material (PDF, DOCX, or TXT) and learn from it through an AI-powered interface. The platform adapts explanations to the student's education level and generates notes, flashcards, quizzes, summaries, and cheat sheets from their content. Files are stored on Cloudinary; text extraction and all AI generation happen server-side. All contextual chat (in-section chat, learning-mode Q&A, and the cross-topic "Ask Anything" assistant) is backed by a Retrieval-Augmented Generation (RAG) pipeline: uploaded material is embedded and indexed in MongoDB Atlas Vector Search, so answers are grounded in the specific chunks most relevant to the question instead of the entire document.
  
 ---
  
@@ -59,6 +59,13 @@ Study Stride lets students upload their study material (PDF, DOCX, or TXT) and l
 - Summary: key concepts, important definitions, exam points
 - Revision sheet: quick revision bullets, formula sheet, last-minute concepts
 - Cheat sheet: keywords, formulae, memory tricks
+### Retrieval-Augmented Generation (RAG)
+- Every upload (`uploadMaterial` and `add-material`) triggers an async, non-blocking `reindexTopic` job so the API response isn't held up by embedding
+- `reindexTopic` re-derives `ConceptSection`s from the topic's `combinedText` via Gemini, then splits each section into ~500-token chunks (`chunkingService.js`, paragraph-aware with 15% overlap) and embeds every chunk with Gemini's `gemini-embedding-001` model (`embeddingService.js`, batched, with the same exponential-backoff retry as `geminiService.js`)
+- Chunks are stored in the `Chunk` collection with their embedding vector, and queried with MongoDB Atlas `$vectorSearch` (`vectorSearchService.js`) — filtered by `topicId` for in-topic chat, or by `userId` for cross-topic chat
+- **Section chat & Learning Mode "ask"**: retrieval is scoped to the current topic (`searchByTopic`) and merged with the current page's content, so the AI can answer questions that reference other pages/sections of the same topic
+- **Ask Anything** (`/chat`, `HomeChat.jsx`): a topic-agnostic chat that searches across *all* of a user's indexed material (`searchByUser`), and displays which topic/snippet each answer was grounded in as source chips
+- Ingestion embeddings use `taskType: 'RETRIEVAL_DOCUMENT'`; query-time embeddings use `taskType: 'RETRIEVAL_QUERY'` (Gemini's recommended asymmetric embedding setup)
 ---
  
 ## Tech Stack
@@ -68,7 +75,9 @@ Study Stride lets students upload their study material (PDF, DOCX, or TXT) and l
 | Frontend | React 18, React Router v6, Tailwind CSS, Axios |
 | Backend | Node.js, Express.js |
 | Database | MongoDB with Mongoose |
-| AI | Google Gemini API (`@google/generative-ai`) — model: `gemini-2.5-flash-lite` |
+| AI (generation) | Google Gemini API (`@google/generative-ai`) — model: `gemini-2.5-flash-lite` |
+| AI (embeddings) | Google Gemini embeddings — model: `gemini-embedding-001` |
+| Vector Search | MongoDB Atlas `$vectorSearch` (index: `chunk_vector_index` on `Chunk.embedding`) |
 | File Storage | Cloudinary (raw upload via `streamifier`) |
 | File Parsing | `pdf-parse` (PDF), `mammoth` (DOCX), native Buffer for TXT |
 | Auth | `bcrypt` (password hashing), `jsonwebtoken` (JWT) |
@@ -97,11 +106,13 @@ STUDY_STRIDE/
     │   │   ├── notesController.js     # Notes CRUD, section regeneration, save/approve
     │   │   ├── flashcardController.js # Flashcard generation and retrieval
     │   │   ├── quizController.js      # Quiz generation, attempt submission, answer evaluation
-    │   │   ├── sectionController.js   # ConceptSection CRUD, section chat, complete/lock
-    │   │   └── generationController.js# Summary, revision sheet, cheat sheet (cached)
+    │   │   ├── sectionController.js   # ConceptSection CRUD, RAG-backed section chat, complete/lock
+    │   │   ├── generationController.js# Summary, revision sheet, cheat sheet (cached)
+    │   │   └── homeChatController.js  # RAG chat across all of a user's topics ("Ask Anything")
     │   ├── middleware/
     │   │   ├── authMiddleware.js      # JWT verify → req.user
-    │   │   └── uploadMiddleware.js    # Multer memory storage, up to 10 files
+    │   │   ├── uploadMiddleware.js    # Multer memory storage, up to 10 files
+    │   │   └── rateLimitMiddleware.js # authLimiter, uploadLimiter, apiLimiter (fixed-window) + generationLimiter (hand-rolled sliding-window counter for Gemini generation routes)
     │   ├── models/
     │   │   ├── User.js
     │   │   ├── Topic.js               # Groups multiple Materials; holds combinedText + learningSections cache
@@ -113,7 +124,7 @@ STUDY_STRIDE/
     │   │   ├── QuizAttempt.js
     │   │   ├── GeneratedContent.js    # Cached summary/revision/cheatsheet
     │   │   ├── Evaluation.js          # AI answer evaluations
-    │   │   └── Chunk.js               # (legacy — not actively used)
+    │   │   └── Chunk.js               # RAG chunk: text + embedding vector, indexed by topicId/userId for $vectorSearch
     │   ├── routes/
     │   │   ├── authRoutes.js          # POST /register, POST /login, GET /me, PUT /profile
     │   │   ├── topicRoutes.js         # CRUD + POST /:id/add-material
@@ -123,18 +134,23 @@ STUDY_STRIDE/
     │   │   ├── flashcardRoutes.js     # POST /:id/generate, GET /:id
     │   │   ├── quizRoutes.js          # POST /:id/generate, GET /:id, POST /attempt, POST /evaluate, POST /section-quiz
     │   │   ├── sectionRoutes.js       # generate, get, chat, complete, edit, lock, lock-all
-    │   │   └── generationRoutes.js    # GET /:id/summary, /revision, /cheatsheet
+    │   │   ├── generationRoutes.js    # GET /:id/summary, /revision, /cheatsheet
+    │   │   └── homeChatRoutes.js      # POST /ask — cross-topic RAG chat
     │   ├── services/
-    │   │   ├── geminiService.js       # All Gemini calls with retry logic (exponential backoff on 429/503)
+    │   │   ├── geminiService.js       # All Gemini text-generation calls with retry logic (exponential backoff on 429/503)
     │   │   ├── fileService.js         # extractTextFromBuffer (PDF/DOCX/TXT)
     │   │   ├── cloudinaryService.js   # uploadBuffer, deleteFile
-    │   │   └── chunkingService.js     # (legacy — not actively used)
+    │   │   ├── chunkingService.js     # Splits a ConceptSection into ~500-token, paragraph-aware chunks (15% overlap) for embedding
+    │   │   ├── embeddingService.js    # embedText/embedBatch via gemini-embedding-001, with retry logic
+    │   │   ├── ragService.js          # reindexTopic — regenerates ConceptSections + Chunks + embeddings after every upload
+    │   │   └── vectorSearchService.js # searchByTopic / searchByUser — MongoDB Atlas $vectorSearch queries
     │   └── server.js                  # Express app, routes, global error handler
     └── frontend/
         ├── public/
         └── src/
             ├── api/
-            │   └── axios.js           # Axios instance with baseURL + auth header; 401 → auto logout
+            │   ├── axios.js           # Axios instance with baseURL + auth header; 401 → auto logout
+            │   └── homeChat.js        # askHomeChat(question) → POST /api/home-chat/ask
             ├── components/
             │   ├── common/            # Button, Loader, ImportanceTag, ThemeToggle
             │   ├── flashcards/        # FlipCard
@@ -157,6 +173,7 @@ STUDY_STRIDE/
             │   ├── Flashcards.jsx     # Flashcard grid
             │   ├── Quiz.jsx           # Full quiz page with AI evaluation
             │   ├── GeneratedContent.jsx# Summary / Revision / Cheat Sheet tabs
+            │   ├── HomeChat.jsx       # "Ask Anything" — RAG chat across all uploaded topics, with source chips
             │   ├── Profile.jsx        # Profile view/edit
             │   └── auth/              # Login.jsx, Register.jsx
             ├── App.jsx                # Route definitions
@@ -169,9 +186,10 @@ STUDY_STRIDE/
  
 ### Prerequisites
 - Node.js v18+
-- A MongoDB Atlas account (or local MongoDB)
-- A Google Gemini API key (free tier: `gemini-2.5-flash-lite` — 20 req/day; `gemini-2.5-flash` — 1,500 req/day)
+- A **MongoDB Atlas** account (a plain/local MongoDB will *not* work for RAG — `$vectorSearch` is an Atlas-only aggregation stage)
+- A Google Gemini API key (free tier: `gemini-2.5-flash-lite` — 20 req/day; `gemini-2.5-flash` — 1,500 req/day; embeddings via `gemini-embedding-001` use the same key)
 - A Cloudinary account (free tier is sufficient)
+- An **Atlas Vector Search index** named `chunk_vector_index` created on the `chunks` collection, indexing the `embedding` field as `knnVector` (dimension = your embedding model's output size, similarity = cosine), plus `topicId` and `userId` as filter fields. Without this index, `vectorSearchService.js` calls will fail and RAG-backed chat (section chat, learning "ask", Ask Anything) won't return results.
 ### 1. Environment files
  
 **Backend** — copy and fill in:
@@ -240,4 +258,6 @@ The retry logic in `geminiService.js` handles 429 (rate limit) and 503 (overload
 - **JWT-embedded `declaredLevel`**: The student's education level is in the JWT payload so controllers never need a DB round-trip to get it — it's on `req.user.declaredLevel`.
 - **Section-level quiz vs full quiz**: Between sections, a mini quiz (2–5 questions) is generated from that section's content only. The full quiz (11 questions across all types) is generated from the whole topic and can be accessed from the Quiz standalone page.
 - **Cached generation**: Summaries, revision sheets, cheat sheets, and flashcards are stored in MongoDB after first generation. The same Gemini call is never made twice for the same content.
- 
+- **Two different AI-context strategies, used deliberately**: bulk generation (notes, flashcards, quiz, summary/revision/cheatsheet) sends the *entire* `combinedText` to Gemini in one call, since these need whole-document coverage. Chat (section chat, learning-mode "ask", Ask Anything) instead retrieves only the top-k most relevant chunks via RAG, since chat context windows and latency matter more than exhaustive coverage there.
+- **Async re-indexing**: `reindexTopic` is fired-and-forgotten (`.catch(console.error)`, not awaited) after every upload, so the upload request returns immediately rather than blocking on section-splitting + embedding. This means there's a short window after upload where RAG-backed chat is still serving results from the previous index.
+- **Known trade-off**: `reindexTopic` deletes and regenerates *all* `ConceptSection`s for a topic on every new upload (since RAG chunking is keyed off freshly-generated sections). Because the Learning Mode section flow (`sectionController.js`) uses the same `ConceptSection` model for its chat history, generated notes, and completion/lock status, uploading an additional file to a topic a student has already started studying will reset that topic's in-progress section state. This is a deliberate simplicity-over-completeness call, not an oversight — a production fix would decouple RAG chunk indexing from the user-facing section/progress model.
