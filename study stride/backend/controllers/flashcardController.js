@@ -1,5 +1,6 @@
 const Flashcard = require('../models/Flashcard');
 const Topic = require('../models/Topic');
+const Material = require('../models/Material');
 const gemini = require('../services/geminiService');
 
 // :materialId route param is actually a Topic id now (kept name for
@@ -8,10 +9,15 @@ const gemini = require('../services/geminiService');
 const generateFlashcards = async (req, res) => {
   try {
     const { materialId: topicId } = req.params;
-    const existing = await Flashcard.find({ materialId: topicId, userId: req.user.id });
-    if (existing.length > 0) return res.json(existing);
+    const force = req.query.force === 'true';
 
-    
+    if (force) {
+      await Flashcard.deleteMany({ materialId: topicId, userId: req.user.id });
+    } else {
+      const existing = await Flashcard.find({ materialId: topicId, userId: req.user.id });
+      if (existing.length > 0) return res.json(existing);
+    }
+
     const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
     if (!topic.combinedText || !topic.combinedText.trim()) {
@@ -38,4 +44,18 @@ const getFlashcards = async (req, res) => {
   }
 };
 
-module.exports = { generateFlashcards, getFlashcards };
+// Item 14: is there material added after this flashcard set was generated?
+const checkStale = async (req, res) => {
+  try {
+    const { materialId: topicId } = req.params;
+    const cards = await Flashcard.find({ materialId: topicId, userId: req.user.id }).sort({ createdAt: 1 }).limit(1);
+    if (cards.length === 0) return res.json({ stale: false }); // nothing generated yet
+
+    const newerMaterial = await Material.countDocuments({ topicId, createdAt: { $gt: cards[0].createdAt } });
+    res.json({ stale: newerMaterial > 0 });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { generateFlashcards, getFlashcards, checkStale };

@@ -1,10 +1,22 @@
 const GeneratedContent = require('../models/GeneratedContent');
 const Topic = require('../models/Topic');
+const Material = require('../models/Material');
 const gemini = require('../services/geminiService');
 
-const getOrGenerate = async (topicId, userId, type, generatorFn) => {
-  const existing = await GeneratedContent.findOne({ materialId: topicId, userId, type });
-  if (existing) return existing;
+// True if any Material under this topic was created after `since`.
+const topicHasNewMaterialSince = async (topicId, since) => {
+  if (!since) return false;
+  const count = await Material.countDocuments({ topicId, createdAt: { $gt: since } });
+  return count > 0;
+};
+
+const getOrGenerate = async (topicId, userId, type, generatorFn, force = false) => {
+  if (force) {
+    await GeneratedContent.deleteOne({ materialId: topicId, userId, type });
+  } else {
+    const existing = await GeneratedContent.findOne({ materialId: topicId, userId, type });
+    if (existing) return existing;
+  }
 
   const topic = await Topic.findById(topicId);
   if (!topic) throw new Error('Topic not found');
@@ -18,7 +30,7 @@ const getOrGenerate = async (topicId, userId, type, generatorFn) => {
 
 const getSummary = async (req, res) => {
   try {
-    const result = await getOrGenerate(req.params.materialId, req.user.id, 'summary', gemini.generateSummary);
+    const result = await getOrGenerate(req.params.materialId, req.user.id, 'summary', gemini.generateSummary, req.query.force === 'true');
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -27,7 +39,7 @@ const getSummary = async (req, res) => {
 
 const getRevision = async (req, res) => {
   try {
-    const result = await getOrGenerate(req.params.materialId, req.user.id, 'revision', gemini.generateRevisionSheet);
+    const result = await getOrGenerate(req.params.materialId, req.user.id, 'revision', gemini.generateRevisionSheet, req.query.force === 'true');
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -36,11 +48,32 @@ const getRevision = async (req, res) => {
 
 const getCheatSheet = async (req, res) => {
   try {
-    const result = await getOrGenerate(req.params.materialId, req.user.id, 'cheatsheet', gemini.generateCheatSheet);
+    const result = await getOrGenerate(req.params.materialId, req.user.id, 'cheatsheet', gemini.generateCheatSheet, req.query.force === 'true');
     res.json(result);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-module.exports = { getSummary, getRevision, getCheatSheet };
+// Item 14: has new material been added since each cached artifact was
+// generated? Frontend uses this to decide whether to show the "new material
+// added — regenerate?" popup. Booleans only, no page counts.
+const checkStale = async (req, res) => {
+  try {
+    const topicId = req.params.materialId;
+    const types = ['summary', 'revision', 'cheatsheet'];
+    const existingByType = await GeneratedContent.find({ materialId: topicId, userId: req.user.id, type: { $in: types } });
+
+    const result = {};
+    for (const type of types) {
+      const doc = existingByType.find(d => d.type === type);
+      result[type] = doc ? await topicHasNewMaterialSince(topicId, doc.updatedAt) : false; // nothing generated yet — nothing to be stale
+    }
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { getSummary, getRevision, getCheatSheet, checkStale, topicHasNewMaterialSince };

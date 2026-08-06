@@ -2,6 +2,7 @@ const Quiz = require('../models/Quiz');
 const QuizAttempt = require('../models/QuizAttempt');
 const Topic = require('../models/Topic');
 const Evaluation = require('../models/Evaluation');
+const Material = require('../models/Material');
 const gemini = require('../services/geminiService');
 
 const generateQuiz = async (req, res) => {
@@ -66,4 +67,20 @@ const evaluateAnswer = async (req, res) => {
   }
 };
 
-module.exports = { generateQuiz, getQuiz, submitAttempt, evaluateAnswer };
+// Item 14: is there material added after the current quiz was generated?
+// generateQuiz already deletes+regenerates on every call, so this is purely
+// informational for the "regenerate?" prompt — no force flag needed here.
+const checkStale = async (req, res) => {
+  try {
+    const { materialId: topicId } = req.params;
+    const quiz = await Quiz.findOne({ materialId: topicId, userId: req.user.id });
+    if (!quiz) return res.json({ stale: false }); // nothing generated yet
+
+    const newerMaterial = await Material.countDocuments({ topicId, createdAt: { $gt: quiz.createdAt } });
+    res.json({ stale: newerMaterial > 0 });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+module.exports = { generateQuiz, getQuiz, submitAttempt, evaluateAnswer, checkStale };

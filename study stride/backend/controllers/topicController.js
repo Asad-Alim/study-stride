@@ -22,7 +22,7 @@ const getTopic = async (req, res) => {
   try {
     const topic = await Topic.findOne({ _id: req.params.id, userId: req.user.id }).select('-combinedText');
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
-    const materials = await Material.find({ topicId: topic._id }).select('-extractedText');
+    const materials = await Material.find({ topicId: topic._id });
     res.json({ ...topic.toObject(), materialDetails: materials });
   } catch (err) {
     res.status(500).json({ message: err.message });

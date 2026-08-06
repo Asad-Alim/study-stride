@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { generateQuiz, getQuiz, submitAttempt, evaluateAnswer } = require('../controllers/quizController');
+const { generateQuiz, getQuiz, submitAttempt, evaluateAnswer, checkStale } = require('../controllers/quizController');
 const { protect } = require('../middleware/authMiddleware');
 const { generationLimiter } = require('../middleware/rateLimitMiddleware');
 const gemini = require('../services/geminiService');
@@ -21,6 +21,7 @@ router.post('/section-quiz', protect, generationLimiter, async (req, res) => {
 });
 
 router.post('/:materialId/generate', protect, generationLimiter, generateQuiz);
+router.get('/:materialId/stale-check', protect, checkStale);
 router.get('/:materialId', protect, getQuiz);
 
 module.exports = router;
