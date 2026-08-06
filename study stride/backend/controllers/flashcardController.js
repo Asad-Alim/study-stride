@@ -2,6 +2,7 @@ const Flashcard = require('../models/Flashcard');
 const Topic = require('../models/Topic');
 const Material = require('../models/Material');
 const gemini = require('../services/geminiService');
+const { getGenerationInput } = require('../services/inputSourceService');
 
 // :materialId route param is actually a Topic id now (kept name for
 // frontend compatibility — a "topic" is the chapter that can hold multiple
@@ -24,7 +25,8 @@ const generateFlashcards = async (req, res) => {
       return res.status(400).json({ message: 'No study material found for this topic. Please upload a file first.' });
     }
 
-    const generated = await gemini.generateFlashcards(topic.combinedText);
+    const inputText = await getGenerationInput(topic);
+    const generated = await gemini.generateFlashcards(inputText);
     const cards = await Flashcard.insertMany(
       generated.flashcards.map(f => ({ ...f, materialId: topicId, userId: req.user.id }))
     );

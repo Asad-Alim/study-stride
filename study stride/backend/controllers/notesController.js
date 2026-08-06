@@ -1,7 +1,11 @@
 const Notes = require('../models/Notes');
 const Topic = require('../models/Topic');
+const Chunk = require('../models/Chunk');
 const gemini = require('../services/geminiService');
 const { getPendingQueue, takeBatch, advancePagesProcessed } = require('../services/queueService');
+const { embedText } = require('../services/embeddingService');
+const { searchByTopic } = require('../services/vectorSearchService');
+const { retrieveRelevantChunks } = require('../services/retrievalService');
 
 const generateNotes = async (req, res) => {
   try {
@@ -78,12 +82,27 @@ const regenerateSection = async (req, res) => {
 
     const notes = await Notes.findOne({ _id: notesId, userId: req.user.id });
     if (!notes) return res.status(404).json({ message: 'Notes not found' });
-    if (!notes.sections[sectionIndex]) return res.status(400).json({ message: 'Invalid sectionIndex' });
+    const currentSection = notes.sections[sectionIndex];
+    if (!currentSection) return res.status(400).json({ message: 'Invalid sectionIndex' });
 
     const topic = await Topic.findById(notes.materialId);
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
 
-    const newSection = await gemini.regenerateSection(topic.combinedText, notes.sections[sectionIndex].heading, feedback);
+    // RAG: ground the edit in the actual source material (design doc item 17)
+    // — query = the note's current content + the student's edit request,
+    // same retrieval pipeline sections/chat already use. Falls back to
+    // combinedText if nothing is indexed yet.
+    let sourceContent = topic.combinedText;
+    const chunkCount = await Chunk.countDocuments({ topicId: topic._id });
+    if (chunkCount > 0) {
+      const queryEmbedding = await embedText(`${currentSection.content}\n\n${feedback}`, 'RETRIEVAL_QUERY');
+      const results = await retrieveRelevantChunks(searchByTopic, topic._id, queryEmbedding, feedback);
+      if (results.length > 0) {
+        sourceContent = results.map(r => r.text).join('\n\n---\n\n');
+      }
+    }
+
+    const newSection = await gemini.regenerateSection(currentSection.content, sourceContent, currentSection.heading, feedback);
 
     notes.sections[sectionIndex] = newSection;
     await notes.save();

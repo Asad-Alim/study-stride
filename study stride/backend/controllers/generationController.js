@@ -2,6 +2,7 @@ const GeneratedContent = require('../models/GeneratedContent');
 const Topic = require('../models/Topic');
 const Material = require('../models/Material');
 const gemini = require('../services/geminiService');
+const { getGenerationInput } = require('../services/inputSourceService');
 
 // True if any Material under this topic was created after `since`.
 const topicHasNewMaterialSince = async (topicId, since) => {
@@ -24,7 +25,8 @@ const getOrGenerate = async (topicId, userId, type, generatorFn, force = false) 
     throw new Error('No study material found for this topic. Please upload a file first.');
   }
 
-  const content = await generatorFn(topic.combinedText);
+  const inputText = await getGenerationInput(topic);
+  const content = await generatorFn(inputText);
   return await GeneratedContent.create({ materialId: topicId, userId, type, content });
 };
 

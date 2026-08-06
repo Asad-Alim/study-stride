@@ -3,7 +3,12 @@ const QuizAttempt = require('../models/QuizAttempt');
 const Topic = require('../models/Topic');
 const Evaluation = require('../models/Evaluation');
 const Material = require('../models/Material');
+const Chunk = require('../models/Chunk');
 const gemini = require('../services/geminiService');
+const { getGenerationInput } = require('../services/inputSourceService');
+const { embedText } = require('../services/embeddingService');
+const { searchByTopic } = require('../services/vectorSearchService');
+const { retrieveRelevantChunks } = require('../services/retrievalService');
 
 const generateQuiz = async (req, res) => {
   try {
@@ -13,7 +18,8 @@ const generateQuiz = async (req, res) => {
     if (!topic.combinedText || !topic.combinedText.trim()) {
       return res.status(400).json({ message: 'No study material found for this topic. Please upload a file first.' });
     }
-    const generated = await gemini.generateQuiz(topic.combinedText);
+    const inputText = await getGenerationInput(topic);
+    const generated = await gemini.generateQuiz(inputText);
 
     // Delete old quiz so every generate call gives fresh questions
     await Quiz.findOneAndDelete({ materialId: topicId, userId: req.user.id });
@@ -51,7 +57,20 @@ const evaluateAnswer = async (req, res) => {
     const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
 
-    const result = await gemini.evaluateAnswer(question, studentAnswer, topic.combinedText);
+    // RAG: grade against the most relevant chunks instead of the full
+    // document (design doc item 16) — same retrieval pipeline chat/sections
+    // already use. Falls back to combinedText if nothing is indexed yet.
+    let referenceContent = topic.combinedText;
+    const chunkCount = await Chunk.countDocuments({ topicId: topic._id });
+    if (chunkCount > 0) {
+      const queryEmbedding = await embedText(`${question}\n\n${studentAnswer}`, 'RETRIEVAL_QUERY');
+      const results = await retrieveRelevantChunks(searchByTopic, topic._id, queryEmbedding, question);
+      if (results.length > 0) {
+        referenceContent = results.map(r => r.text).join('\n\n---\n\n');
+      }
+    }
+
+    const result = await gemini.evaluateAnswer(question, studentAnswer, referenceContent);
 
     await Evaluation.create({
       userId: req.user.id,
