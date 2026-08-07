@@ -94,7 +94,6 @@ const Quiz = () => {
             </Button>
           </div>
         )}
-      </div>
 
         {!quiz ? (
           <p className="text-sm text-[var(--text-muted)]">No quiz yet. Complete the chapter and generate one.</p>
