@@ -1,203 +1,205 @@
 # Study Stride
- 
+
 An AI-powered adaptive learning platform built on the MERN stack with Google Gemini AI integration.
- 
+
 ## What It Does
- 
-Study Stride lets students upload their study material (PDF, DOCX, or TXT) and learn from it through an AI-powered interface. The platform adapts explanations to the student's education level and generates notes, flashcards, quizzes, summaries, and cheat sheets from their content. Files are stored on Cloudinary; text extraction and all AI generation happen server-side. All contextual chat (in-section chat, learning-mode Q&A, and the cross-topic "Ask Anything" assistant) is backed by a Retrieval-Augmented Generation (RAG) pipeline: uploaded material is embedded and indexed in MongoDB Atlas Vector Search, so answers are grounded in the specific chunks most relevant to the question instead of the entire document.
- 
+
+Study Stride lets students upload their study material (PDF, DOCX, or TXT) and learn from it through an AI-powered interface. The platform adapts explanations to the student's education level and generates notes, flashcards, quizzes, summaries, and cheat sheets from their content. Files are stored on Cloudinary; text extraction and all AI generation happen server-side. All contextual chat (in-section chat, learning-mode Q&A, quiz answer evaluation, notes editing, and the cross-topic "Ask Anything" assistant) is backed by a Retrieval-Augmented Generation (RAG) pipeline: uploaded material is embedded and indexed in MongoDB Atlas Vector Search, so answers are grounded in the specific chunks most relevant to the question instead of the entire document.
+
 ---
- 
+
 ## Core Features
- 
+
 ### Authentication & Profile
-- User registration and login with JWT-based authentication (7-day tokens)
-- Each user declares their education level on signup — this is embedded in the JWT and sent as context to Gemini so all responses are calibrated to their level
-- Profile page: edit education level, age, gender, and upload a profile photo (stored as base64)
+- Registration and login with JWT-based authentication, delivered as an **httpOnly cookie** rather than in the JSON response body (see [Auth design](#authentication-model) below)
+- Each user declares their education level on signup — embedded in the JWT payload and sent as context to Gemini so all responses are calibrated to their level
+- **Change password** while logged in (`PUT /auth/change-password`) — bumps a per-user token version, invalidating every other outstanding session, while the request making the change gets a fresh cookie so it stays logged in
+- **Log out other devices** (`POST /auth/logout-others`) — invalidates every session except the current one, without requiring a password
+- Profile page: edit education level, age, gender, upload a profile photo (stored as base64), change password, log out other devices, log out
 - Annual class-upgrade prompt: shown in March–April if the user has been enrolled for 10+ months and hasn't been prompted this year
+
 ### Topics & Materials
 - Students create **topics** (e.g. "OSI Model") and upload one or multiple PDF/DOCX/TXT files under each topic
 - Files are parsed server-side using `pdf-parse` (PDF) and `mammoth` (DOCX) and uploaded to **Cloudinary**
-- All files in a topic are concatenated into `combinedText` — Gemini always sees the full topic, not individual files
+- All files in a topic are concatenated into `Topic.combinedText` — most bulk-generation features read this instead of individual files
 - `TopicFiles` page: view all files in a topic, add more files, or delete individual files
-- Deleting a file rebuilds `combinedText` and clears cached learning sections so AI regenerates with the updated content
+- Adding a file is **additive**: the new material's pages join the pending generation queue (see [Queue-based generation](#queue-based-generation) below) without disturbing any notes/sections already generated from earlier material — the page shows a one-time heads-up when this happens
+- Deleting a file flags any notes/sections that assumed concepts it introduced as stale (`assumptionsStale`), rather than silently leaving outdated content or nuking everything downstream
+- Deleting a topic **cascades**: Cloudinary files, `Chunk`s, `ConceptSection`s, `Flashcard`s, `Quiz`/`QuizAttempt`s, `Evaluation`s, and `GeneratedContent` are all cleaned up, not just the `Material`/`Topic` documents
+
 ### Learning Mode
 - On entering, users choose between **Learn + Build Notes** (3-panel) or **Just Learn** (2-panel)
 - **Strict / Non-strict toggle**: strict mode limits Gemini to the uploaded document only; non-strict allows it to fill gaps with its own knowledge
-- Gemini splits the uploaded content into concept sections (cached on the topic after first generation)
-- Toggling strict/non-strict mid-session forces a full section regeneration
+- Concept sections are generated **incrementally off a shared pending-page queue** (`getPendingQueue`/`takeBatch`/`advancePagesProcessed` in `queueService.js`), not all at once — see below
 - **3-panel layout** (Learn + Notes mode): Notes panel | Content panel | Chat panel — all three panels are resizable with drag handles and individually collapsible
 - **2-panel layout** (Just Learn mode): Content panel | Chat panel — resizable and collapsible
 - **Text selection menu**: highlight any text in the content panel to trigger Explain / Simplify / Give an example actions inline in the chat
-- **Font size controls** in the top bar (A- / A+)
-- **View Uploaded Notes drawer**: shows the list of uploaded files for reference while studying
-- **Between-section mini quiz**: after each section, a 2–5 question MCQ quiz is auto-generated from that section's content specifically; can be skipped or disabled globally via toggle
+- **Between-section mini quiz**: after each section, a 2–5 question MCQ quiz is auto-generated from that section's content specifically
 - **End-of-chapter quiz prompt**: after the last section, user is asked if they want the full chapter quiz
-- **Notes auto-generation** (Learn + Notes mode): notes are generated after each page using the section content + the student's chat questions from that session, then saved to the backend immediately
-- **Notes panel** shows cumulative notes for all completed pages, with a new-notes banner on arrival; includes an AI edit box to update notes via natural language instruction
-- **Notes review popup** between sections: review and edit current page notes before moving on
-- **Final notes summary popup**: at the end of a chapter, review all notes and choose to save or discard
+
 ### Notes (standalone page)
-- Auto-generates notes if none exist for a topic
-- Displays all notes sections with colour-coded importance tags (critical / important / general)
-- Each section can be manually edited inline or regenerated via AI with feedback
+- Auto-generates a first batch of notes if none exist for a topic
+- **Queue-based continuation** (`generate-next-batch`/`queue-status`): notes have their own independent progress counter (`Material.notesPagesProcessed`), separate from learning sections' (`Material.pagesProcessed`) — a topic can be ahead on notes and behind on sections, or vice versa. When there's more material to turn into notes, the page shows a "Continue Notes only" / "Continue Notes + Learning" choice
+- Each generated batch carries forward the topic's `conceptIndex` (one-liners of concepts already taught) so notes don't re-explain what's already covered
+- Each section can be manually edited inline or **regenerated via AI with feedback**, grounded in the most relevant retrieved chunks of the source material rather than the whole document (RAG — see below)
 - Notes can be approved or kept as draft
+
 ### Flashcards
-- AI-generated from the full topic's `combinedText`; cached so Gemini is not called again on repeat visits
-- Grid layout with colour-coded cards; click any card to reveal its answer
-- Progress bar tracks how many cards have been revealed; reset button available
-- Completion banner shown when all cards are revealed
+- AI-generated from the topic's content; cached so Gemini is not called again on repeat visits
+- **Staleness detection**: if material has been added to the topic since the cached set was generated, a banner offers to regenerate (`?force=true` bypasses the cache and replaces the set)
+- Grid layout with colour-coded cards; click any card to reveal its answer; progress bar + reset
+
 ### Quiz (standalone page)
 - On-demand quiz generation: 5 MCQs + 3 short + 2 long + 1 descriptive question
-- **Regenerates fresh each time** — old quiz is deleted before generating a new one
+- **Regenerates fresh each time** — old quiz is deleted before generating a new one (so it never needs the staleness-check-plus-force pattern flashcards/summary/etc. use — it's always "fresh" on generate)
+- A lightweight staleness check still exists purely to decide whether to *show* the "regenerate?" prompt in the first place
 - MCQ answers highlighted green/red on submit; unattempted questions show the correct answer
-- Descriptive/long/short questions: AI evaluator scores the student's answer and returns score, feedback, and missing points
+- Descriptive/long/short questions: **AI evaluator grades against the most relevant retrieved chunks** of the source material (RAG-grounded, see below) instead of the entire document, and returns score, feedback, and missing points
 - Attempts are saved to MongoDB
+
 ### Study Kit (Generated Content)
 - Three on-demand generation tabs: **Summary**, **Revision Sheet**, **Cheat Sheet**
 - Each is generated once and cached in MongoDB so Gemini is not called again for the same content
-- Summary: key concepts, important definitions, exam points
-- Revision sheet: quick revision bullets, formula sheet, last-minute concepts
-- Cheat sheet: keywords, formulae, memory tricks
+- **Staleness detection + regenerate**, same pattern as flashcards: compares the cached artifact's `updatedAt` against the topic's most recently added `Material`
+
 ### Retrieval-Augmented Generation (RAG)
-- Every upload (`uploadMaterial` and `add-material`) triggers an async, non-blocking `reindexTopic` job so the API response isn't held up by embedding
-- `reindexTopic` re-derives `ConceptSection`s from the topic's `combinedText` via Gemini, then splits each section into ~500-token chunks (`chunkingService.js`, paragraph-aware with 15% overlap) and embeds every chunk with Gemini's `gemini-embedding-001` model (`embeddingService.js`, batched, with the same exponential-backoff retry as `geminiService.js`)
-- Chunks are stored in the `Chunk` collection with their embedding vector, and queried with MongoDB Atlas `$vectorSearch` (`vectorSearchService.js`) — filtered by `topicId` for in-topic chat, or by `userId` for cross-topic chat
-- **Section chat & Learning Mode "ask"**: retrieval is scoped to the current topic (`searchByTopic`) and merged with the current page's content, so the AI can answer questions that reference other pages/sections of the same topic
-- **Ask Anything** (`/chat`, `HomeChat.jsx`): a topic-agnostic chat that searches across *all* of a user's indexed material (`searchByUser`), and displays which topic/snippet each answer was grounded in as source chips
+- Every material upload triggers an async, non-blocking `ingestMaterial` job — chunks that one material's pages (`chunkingService.js`, paragraph-aware, ~500 tokens, 15% overlap) and embeds every chunk with Gemini's `gemini-embedding-001` model, independent of concept-section generation pacing
+- Chunks are stored in the `Chunk` collection with their embedding vector, queried with MongoDB Atlas `$vectorSearch` — filtered by `topicId` for in-topic use, or by `userId` for cross-topic chat
+- **Two different AI-context strategies, used deliberately**:
+  - *Bulk generation* (summary/revision/cheatsheet/flashcards/quiz-questions/notes) sends condensed whole-topic content to Gemini in one call, since these need full-document coverage. For documents small enough (`combinedText.length <= 40,000` chars), that's the raw `combinedText`; above that threshold, `inputSourceService.js` swaps in the already-generated `learningSections` or `Notes` content instead — both are themselves Gemini-condensed representations of the *entire* document, so a single call still covers all of it rather than silently truncating at the 40k-char mark the way a raw slice would.
+  - *Grounded single-answer tasks* (section chat, learning-mode "ask", quiz answer evaluation, notes editing, Ask Anything) instead retrieve only the top-k most relevant chunks via RAG, since these need precision and low latency more than exhaustive coverage.
 - Ingestion embeddings use `taskType: 'RETRIEVAL_DOCUMENT'`; query-time embeddings use `taskType: 'RETRIEVAL_QUERY'` (Gemini's recommended asymmetric embedding setup)
+
 ---
- 
+
+## Authentication model
+
+Auth was moved from **JWT-in-response-body + `localStorage` + `Authorization` header** to an **httpOnly cookie**, for one reason: a token sitting in `localStorage` is readable by any JS that runs on the page (including a successful XSS payload), and once read it's exfiltratable. An httpOnly cookie is invisible to page JavaScript entirely — `document.cookie` never shows it — so an XSS bug on this app can no longer walk off with a session token.
+
+Practically, this means:
+- `POST /auth/login` and `POST /auth/register` set a `Set-Cookie: token=...; HttpOnly; SameSite=Strict (prod) / Lax (dev); Secure (prod)` header instead of returning `{ token }` in the body
+- The frontend Axios instance sends `withCredentials: true` on every request instead of attaching an `Authorization` header
+- `authMiddleware.js` reads `req.cookies.token` (via `cookie-parser`) instead of the `Authorization` header
+- CORS is configured with `credentials: true` and an explicit `origin` (required for cookies to be sent cross-origin at all)
+- Since there's no longer a token the frontend can inspect to know "am I logged in", `AuthContext` always calls `GET /auth/me` on mount and treats a 401 as "not logged in", rather than gating that call on a `localStorage` check
+
+**Token versioning** (`User.tokenVersion`) solves a problem httpOnly cookies introduce on their own: previously, a leaked/old token could be invalidated by just deleting it client-side. With `localStorage` gone, we need a *server-side* kill switch. Every issued JWT embeds the user's current `tokenVersion`; `authMiddleware.js` compares it against the DB on every request. Changing your password or clicking "log out other devices" increments `tokenVersion`, which instantly invalidates every previously-issued token — including ones an attacker might be holding — without needing a session table or token blocklist.
+
+---
+
+## Queue-based generation
+
+Concept sections and notes are **not** generated in one shot from the whole topic. Instead, each `Material`'s pages sit in an implicit queue (`queueService.js`'s `getPendingQueue`), and a `generate-next-batch` endpoint pulls a batch (capped at ~15,000 chars / 15 pages), generates content for just that batch, and only advances the per-material progress counter (`Material.pagesProcessed` for sections, `Material.notesPagesProcessed` for notes — deliberately separate counters) **after** generation and persistence both succeed.
+
+Why: a single Gemini call over an entire large document is slow, expensive, and risks losing earlier pages of context to the model's effective attention/output limits. Batching keeps each call small and fast, and because progress is tracked per-material rather than per-topic, adding a new file to a topic a student has already partially studied just adds that file's pages to the tail of the queue — it does not touch, re-generate, or invalidate anything already produced from the earlier files. This directly replaced an earlier design (`reindexTopic`) that deleted and regenerated *all* sections for a topic on every new upload — workable, but it meant uploading one more file to a topic you'd already started studying would silently wipe your progress. The queue design was built specifically to remove that trade-off.
+
+---
+
 ## Tech Stack
- 
+
 | Layer | Technology |
 |---|---|
-| Frontend | React 18, React Router v6, Tailwind CSS, Axios |
+| Frontend | React 18, React Router v6, Tailwind CSS, Axios (`withCredentials: true`) |
 | Backend | Node.js, Express.js |
 | Database | MongoDB with Mongoose |
-| AI (generation) | Google Gemini API (`@google/generative-ai`) — model: `gemini-2.5-flash-lite` |
+| AI (generation) | Google Gemini API (`@google/generative-ai`) |
 | AI (embeddings) | Google Gemini embeddings — model: `gemini-embedding-001` |
 | Vector Search | MongoDB Atlas `$vectorSearch` (index: `chunk_vector_index` on `Chunk.embedding`) |
 | File Storage | Cloudinary (raw upload via `streamifier`) |
 | File Parsing | `pdf-parse` (PDF), `mammoth` (DOCX), native Buffer for TXT |
-| Auth | `bcrypt` (password hashing), `jsonwebtoken` (JWT) |
+| Auth | `bcrypt` (password hashing), `jsonwebtoken` (JWT), `cookie-parser` (httpOnly cookie auth) |
 | File Uploads | Multer (memory storage — no disk writes) |
 | Dev Server | Nodemon |
- 
+
 ---
- 
+
 ## Project Structure
- 
-```
+
 STUDY_STRIDE/
-├── backend.env              # Backend secrets (not committed)
-├── backend.env.example      # Template — copy this to backend.env
-├── frontend.env             # Frontend env (not committed)
-├── frontend.env.example     # Template — copy this to frontend.env
+├── backend.env # Backend secrets (not committed)
+├── backend.env.example # Template — copy this to backend.env
+├── frontend.env # Frontend env (not committed)
+├── frontend.env.example # Template — copy this to frontend.env
 └── study stride/
-    ├── backend/
-    │   ├── config/
-    │   │   └── db.js                  # MongoDB connection
-    │   ├── controllers/
-    │   │   ├── authController.js      # register, login, getMe, updateProfile
-    │   │   ├── topicController.js     # CRUD for topics
-    │   │   ├── materialController.js  # File upload, text extraction, Cloudinary, rebuildCombinedText
-    │   │   ├── learningController.js  # Section splitting, chunk delivery, ask question
-    │   │   ├── notesController.js     # Notes CRUD, section regeneration, save/approve
-    │   │   ├── flashcardController.js # Flashcard generation and retrieval
-    │   │   ├── quizController.js      # Quiz generation, attempt submission, answer evaluation
-    │   │   ├── sectionController.js   # ConceptSection CRUD, RAG-backed section chat, complete/lock
-    │   │   ├── generationController.js# Summary, revision sheet, cheat sheet (cached)
-    │   │   └── homeChatController.js  # RAG chat across all of a user's topics ("Ask Anything")
-    │   ├── middleware/
-    │   │   ├── authMiddleware.js      # JWT verify → req.user
-    │   │   ├── uploadMiddleware.js    # Multer memory storage, up to 10 files
-    │   │   └── rateLimitMiddleware.js # authLimiter, uploadLimiter, apiLimiter (fixed-window) + generationLimiter (hand-rolled sliding-window counter for Gemini generation routes)
-    │   ├── models/
-    │   │   ├── User.js
-    │   │   ├── Topic.js               # Groups multiple Materials; holds combinedText + learningSections cache
-    │   │   ├── Material.js            # Single uploaded file with extractedText + Cloudinary refs
-    │   │   ├── ConceptSection.js      # Section-level data: rawContent, chatHistory, generatedNotes, status
-    │   │   ├── Notes.js               # Page-level notes with sections array
-    │   │   ├── Flashcard.js
-    │   │   ├── Quiz.js
-    │   │   ├── QuizAttempt.js
-    │   │   ├── GeneratedContent.js    # Cached summary/revision/cheatsheet
-    │   │   ├── Evaluation.js          # AI answer evaluations
-    │   │   └── Chunk.js               # RAG chunk: text + embedding vector, indexed by topicId/userId for $vectorSearch
-    │   ├── routes/
-    │   │   ├── authRoutes.js          # POST /register, POST /login, GET /me, PUT /profile
-    │   │   ├── topicRoutes.js         # CRUD + POST /:id/add-material
-    │   │   ├── materialRoutes.js      # POST / (upload), GET /, GET /:id, DELETE /:id
-    │   │   ├── learningRoutes.js      # GET /:id/chunk/:page, POST /regenerate-sections, POST /ask
-    │   │   ├── notesRoutes.js         # generate, get, update, regenerate, save, approve
-    │   │   ├── flashcardRoutes.js     # POST /:id/generate, GET /:id
-    │   │   ├── quizRoutes.js          # POST /:id/generate, GET /:id, POST /attempt, POST /evaluate, POST /section-quiz
-    │   │   ├── sectionRoutes.js       # generate, get, chat, complete, edit, lock, lock-all
-    │   │   ├── generationRoutes.js    # GET /:id/summary, /revision, /cheatsheet
-    │   │   └── homeChatRoutes.js      # POST /ask — cross-topic RAG chat
-    │   ├── services/
-    │   │   ├── geminiService.js       # All Gemini text-generation calls with retry logic (exponential backoff on 429/503)
-    │   │   ├── fileService.js         # extractTextFromBuffer (PDF/DOCX/TXT)
-    │   │   ├── cloudinaryService.js   # uploadBuffer, deleteFile
-    │   │   ├── chunkingService.js     # Splits a ConceptSection into ~500-token, paragraph-aware chunks (15% overlap) for embedding
-    │   │   ├── embeddingService.js    # embedText/embedBatch via gemini-embedding-001, with retry logic
-    │   │   ├── ragService.js          # reindexTopic — regenerates ConceptSections + Chunks + embeddings after every upload
-    │   │   └── vectorSearchService.js # searchByTopic / searchByUser — MongoDB Atlas $vectorSearch queries
-    │   └── server.js                  # Express app, routes, global error handler
-    └── frontend/
-        ├── public/
-        └── src/
-            ├── api/
-            │   ├── axios.js           # Axios instance with baseURL + auth header; 401 → auto logout
-            │   └── homeChat.js        # askHomeChat(question) → POST /api/home-chat/ask
-            ├── components/
-            │   ├── common/            # Button, Loader, ImportanceTag, ThemeToggle
-            │   ├── flashcards/        # FlipCard
-            │   ├── layout/            # AppLayout, Sidebar
-            │   ├── learning/          # LeftPanel, RightPanel, ChatInput, TextSelectionMenu
-            │   ├── notes/             # NoteSection, NoteEditor
-            │   └── quiz/              # MCQQuestion, DescriptiveQuestion
-            ├── context/
-            │   ├── AuthContext.jsx    # login, register, logout, updateProfile, class-upgrade logic
-            │   ├── MaterialContext.jsx# fetchMaterials, uploadMaterial, addFilesToTopic, deleteMaterial, deleteSingleFile
-            │   └── ThemeContext.jsx   # dark/light theme
-            ├── hooks/
-            │   └── useTextSelection.js
-            ├── pages/
-            │   ├── Dashboard.jsx      # Topic grid with mode picker modal
-            │   ├── Upload.jsx         # Multi-file upload with mode picker after upload
-            │   ├── TopicFiles.jsx     # View/add/delete files in a topic
-            │   ├── LearningMode.jsx   # Full learning interface (2 or 3 panel)
-            │   ├── Notes.jsx          # Standalone notes viewer/editor
-            │   ├── Flashcards.jsx     # Flashcard grid
-            │   ├── Quiz.jsx           # Full quiz page with AI evaluation
-            │   ├── GeneratedContent.jsx# Summary / Revision / Cheat Sheet tabs
-            │   ├── HomeChat.jsx       # "Ask Anything" — RAG chat across all uploaded topics, with source chips
-            │   ├── Profile.jsx        # Profile view/edit
-            │   └── auth/              # Login.jsx, Register.jsx
-            ├── App.jsx                # Route definitions
-            └── main.jsx               # React entry point
-```
- 
+├── backend/
+│ ├── config/
+│ │ └── db.js # MongoDB connection
+│ ├── controllers/
+│ │ ├── authController.js # register, login, logout, getMe, updateProfile, changePassword, logoutOthers
+│ │ ├── topicController.js # CRUD for topics, queueStatus, cascade delete
+│ │ ├── materialController.js # File upload, text extraction, Cloudinary, rebuildCombinedText, stale-section flagging on delete
+│ │ ├── learningController.js # Legacy chunk delivery, ask question
+│ │ ├── notesController.js # Notes CRUD, queue-based generate-next-batch, RAG-grounded regenerateSection
+│ │ ├── flashcardController.js # Generation (with force+staleness), retrieval
+│ │ ├── quizController.js # Generation, attempt submission, RAG-grounded answer evaluation, staleness check
+│ │ ├── sectionController.js # ConceptSection CRUD, queue-based generateNextBatch, RAG-backed section chat
+│ │ ├── generationController.js # Summary/revision/cheatsheet (cached, with force+staleness), large-doc input swap
+│ │ └── homeChatController.js # RAG chat across all of a user's topics ("Ask Anything")
+│ ├── middleware/
+│ │ ├── authMiddleware.js # Cookie-based JWT verify + tokenVersion check → req.user
+│ │ ├── uploadMiddleware.js # Multer memory storage, up to 10 files
+│ │ └── rateLimitMiddleware.js # authLimiter, uploadLimiter, apiLimiter (fixed-window) + generationLimiter (sliding-window)
+│ ├── models/
+│ │ ├── User.js # tokenVersion field for cookie/session invalidation
+│ │ ├── Topic.js # combinedText, conceptIndex, learningSections cache
+│ │ ├── Material.js # pagesProcessed / notesPagesProcessed — independent queue progress counters
+│ │ ├── ConceptSection.js
+│ │ ├── Notes.js
+│ │ ├── Flashcard.js / Quiz.js / QuizAttempt.js / GeneratedContent.js / Evaluation.js
+│ │ └── Chunk.js # RAG chunk: text + embedding vector
+│ ├── routes/
+│ │ ├── authRoutes.js # + PUT /change-password, POST /logout-others
+│ │ ├── topicRoutes.js # + POST /:id/add-material (additive, queue-friendly)
+│ │ ├── notesRoutes.js # + POST /:topicId/generate-next-batch, GET /:topicId/queue-status
+│ │ ├── flashcardRoutes.js # + GET /:materialId/stale-check
+│ │ ├── quizRoutes.js # + GET /:materialId/stale-check
+│ │ ├── generationRoutes.js # + GET /:materialId/stale-check
+│ │ └── sectionRoutes.js
+│ ├── services/
+│ │ ├── geminiService.js # All Gemini text-generation calls with retry logic
+│ │ ├── queueService.js # getPendingQueue / takeBatch / advancePagesProcessed — shared queue mechanism
+│ │ ├── inputSourceService.js # getGenerationInput — swaps raw text for condensed sections/notes above 40k chars
+│ │ ├── embeddingService.js # embedText/embedBatch via gemini-embedding-001
+│ │ ├── chunkingService.js # Paragraph-aware ~500-token chunker
+│ │ ├── ragService.js # ingestMaterial — per-material chunk+embed, decoupled from section generation
+│ │ ├── vectorSearchService.js # searchByTopic / searchByUser — Atlas $vectorSearch queries
+│ │ ├── retrievalService.js # retrieveRelevantChunks — search + relevance filter + rerank
+│ │ └── rerankerService.js
+│ └── server.js # Express app, cookie-parser, routes, global error handler
+└── frontend/
+└── src/
+├── api/
+│ └── axios.js # withCredentials: true, 401 → redirect to /login
+├── context/
+│ └── AuthContext.jsx # login/register/logout, changePassword, logoutOthers
+├── pages/
+│ ├── Profile.jsx # + change-password form, log-out-other-devices
+│ ├── Notes.jsx # + continue-generating queue UI (Notes only / Notes+Learning)
+│ ├── TopicFiles.jsx # + new-material heads-up popup
+│ ├── GeneratedContent.jsx # + staleness banner + regenerate
+│ ├── Flashcards.jsx # + staleness banner + regenerate
+│ └── Quiz.jsx # + staleness banner + regenerate
+└── ...
+
+
 ---
- 
+
 ## Setup
- 
+
 ### Prerequisites
 - Node.js v18+
 - A **MongoDB Atlas** account (a plain/local MongoDB will *not* work for RAG — `$vectorSearch` is an Atlas-only aggregation stage)
-- A Google Gemini API key (free tier: `gemini-2.5-flash-lite` — 20 req/day; `gemini-2.5-flash` — 1,500 req/day; embeddings via `gemini-embedding-001` use the same key)
+- A Google Gemini API key
 - A Cloudinary account (free tier is sufficient)
-- An **Atlas Vector Search index** named `chunk_vector_index` created on the `chunks` collection, indexing the `embedding` field as `knnVector` (dimension = your embedding model's output size, similarity = cosine), plus `topicId` and `userId` as filter fields. Without this index, `vectorSearchService.js` calls will fail and RAG-backed chat (section chat, learning "ask", Ask Anything) won't return results.
+- An **Atlas Vector Search index** named `chunk_vector_index` on the `chunks` collection, indexing `embedding` as `knnVector` (cosine similarity), plus `topicId` and `userId` as filter fields
+
 ### 1. Environment files
- 
+
 **Backend** — copy and fill in:
 ```bash
 cp backend.env.example backend.env
 ```
- 
-```
+
 PORT=5000
 MONGO_URI=your_mongodb_connection_string
 JWT_SECRET=any_long_random_string
@@ -206,58 +208,56 @@ FRONTEND_URL=http://localhost:5173
 CLOUDINARY_CLOUD_NAME=your_cloud_name
 CLOUDINARY_API_KEY=your_cloudinary_api_key
 CLOUDINARY_API_SECRET=your_cloudinary_api_secret
-```
- 
+NODE_ENV=development
+
+`NODE_ENV=production` on a real deployment is required for the auth cookie's `Secure` flag to be set correctly (cookies marked `Secure` are only sent over HTTPS).
+
 **Frontend** — copy and fill in:
 ```bash
 cp frontend.env.example frontend.env
 ```
- 
-```
+
 VITE_API_URL=http://localhost:5000/api
-```
- 
+
+
 ### 2. Backend
- 
 ```bash
 cd "study stride/backend"
 npm install
 npm run dev
 ```
- 
-Runs on `http://localhost:5000`. Nodemon auto-reloads on file changes.
- 
+Runs on `http://localhost:5000`.
+
 ### 3. Frontend
- 
 ```bash
 cd "study stride/frontend"
 npm install
 npm run dev
 ```
- 
 Runs on `http://localhost:5173`.
- 
+
+### 4. Cross-origin cookies in production
+If frontend and backend are on different domains/subdomains in production, `SameSite=Strict` (used when `NODE_ENV=production`) will silently block the cookie on cross-site requests. Either serve both from the same parent domain, or relax to `SameSite=None; Secure` in `authController.js`'s `cookieOptions()` if a genuinely cross-site deployment is required.
+
 ---
- 
-## Gemini API Notes
- 
-The app uses `gemini-2.5-flash-lite` by default. The free tier limit is **20 requests/day** for this model. For development and testing, switch to `gemini-2.5-flash` (1,500 req/day free) by changing one line in `backend/services/geminiService.js`:
- 
-```js
-return genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-```
- 
-The retry logic in `geminiService.js` handles 429 (rate limit) and 503 (overload) automatically with exponential backoff (2s → 4s → 8s, up to 3 retries). A hard daily quota (429 with "quota exceeded") will not recover until midnight Pacific time.
- 
----
- 
+
 ## Key Design Decisions
- 
-- **`combinedText` architecture**: All files in a topic are concatenated into a single field on the `Topic` model. Every AI call reads from this field, so Gemini always sees the entire topic — no chunking, no risk of a concept being split across files or pages.
-- **Multer memory storage**: Files are never written to disk. The buffer goes directly to `pdf-parse`/`mammoth` for text extraction, then to Cloudinary for storage.
-- **JWT-embedded `declaredLevel`**: The student's education level is in the JWT payload so controllers never need a DB round-trip to get it — it's on `req.user.declaredLevel`.
-- **Section-level quiz vs full quiz**: Between sections, a mini quiz (2–5 questions) is generated from that section's content only. The full quiz (11 questions across all types) is generated from the whole topic and can be accessed from the Quiz standalone page.
-- **Cached generation**: Summaries, revision sheets, cheat sheets, and flashcards are stored in MongoDB after first generation. The same Gemini call is never made twice for the same content.
-- **Two different AI-context strategies, used deliberately**: bulk generation (notes, flashcards, quiz, summary/revision/cheatsheet) sends the *entire* `combinedText` to Gemini in one call, since these need whole-document coverage. Chat (section chat, learning-mode "ask", Ask Anything) instead retrieves only the top-k most relevant chunks via RAG, since chat context windows and latency matter more than exhaustive coverage there.
-- **Async re-indexing**: `reindexTopic` is fired-and-forgotten (`.catch(console.error)`, not awaited) after every upload, so the upload request returns immediately rather than blocking on section-splitting + embedding. This means there's a short window after upload where RAG-backed chat is still serving results from the previous index.
-- **Known trade-off**: `reindexTopic` deletes and regenerates *all* `ConceptSection`s for a topic on every new upload (since RAG chunking is keyed off freshly-generated sections). Because the Learning Mode section flow (`sectionController.js`) uses the same `ConceptSection` model for its chat history, generated notes, and completion/lock status, uploading an additional file to a topic a student has already started studying will reset that topic's in-progress section state. This is a deliberate simplicity-over-completeness call, not an oversight — a production fix would decouple RAG chunk indexing from the user-facing section/progress model.
+
+- **`combinedText` architecture**: All files in a topic are concatenated into one field on `Topic`. Bulk-generation calls read from this — no chunking, no risk of a concept being split across files or pages. Chat/grounded tasks use RAG chunks instead (see [RAG](#retrieval-augmented-generation-rag)).
+- **Cookie-based auth over `localStorage`**: eliminates JS-readable session tokens as an XSS exfiltration target. See [Authentication model](#authentication-model).
+- **`tokenVersion` for server-side session invalidation**: httpOnly cookies can't be deleted client-side by the app the way a `localStorage` token could, so a DB-backed version counter is the kill switch for password changes and "log out other devices".
+- **Independent queue progress counters** (`pagesProcessed` vs `notesPagesProcessed`): notes and learning sections are generated from the same underlying pages but on separate schedules — a student might be three sections into Learning Mode but have only asked for one page of notes. Coupling their progress would force one feature's pacing onto the other.
+- **Cascade delete is explicit, not relied on Mongo defaults**: MongoDB has no foreign keys or `ON DELETE CASCADE`. Deleting a `Topic` walks every dependent collection (`Material`, `Chunk`, `ConceptSection`, `Flashcard`, `Quiz`, `QuizAttempt`, `Evaluation`, `GeneratedContent`) plus Cloudinary files explicitly, in dependency order, rather than leaving orphaned documents that silently bloat the database and complicate future queries.
+- **Staleness via timestamps, not a dedicated tracking table**: whether a cached summary/flashcard-set/quiz needs regenerating is answered by comparing the cached artifact's `updatedAt` against the newest `Material.createdAt` for that topic — both already exist via Mongoose `timestamps: true`, so no new schema was needed to support the "new material added — regenerate?" prompts.
+- **Large-document input swap over raising a token limit**: rather than trying to fit an arbitrarily large `combinedText` into one Gemini call (or worse, silently truncating it at a fixed character count — which several `geminiService.js` functions already did via `.slice(0, 40000)`), documents past that same 40k-char threshold fall back to sending the already-generated `learningSections`/`Notes` instead. Both are Gemini's own condensed representation of the *entire* source, so the call still covers the whole document rather than losing everything past a fixed cutoff.
+- **RAG for single-answer tasks, whole-document reads for bulk generation**: a chat answer or quiz grade only needs the few passages actually relevant to the question — retrieving broadly and stuffing everything into the prompt would dilute relevance and blow past latency/cost budgets for no benefit. Bulk artifacts (a full summary, a full flashcard set) inherently need to reflect the whole document, so they get the condensed-or-raw full text instead.
+- **Async, per-material ingestion (`ingestMaterial`) instead of a topic-wide reindex**: the previous design (`reindexTopic`) regenerated every `ConceptSection` for a topic on every upload, which also reset a student's in-progress learning state for that topic. Chunking/embedding now happens per newly-uploaded `Material`, fire-and-forget, and never touches existing `ConceptSection`s or `Chunk`s from other materials.
+
+---
+
+## Known Limitations / Future Work
+
+- `SameSite=Strict` cookies require same-site frontend/backend deployment in production (see [setup note above](#4-cross-origin-cookies-in-production))
+- No password-reset-via-email flow yet — `change-password` requires knowing the current password
+- The hand-rolled `generationLimiter` in `rateLimitMiddleware.js` stores counters in an in-process `Map`, which resets on server restart and doesn't share state across multiple server instances — fine for a single-instance deployment, but would need a shared store (e.g. Redis) behind a load balancer
+- Large-document input swap (40,000-char threshold) is a fixed constant; a token-aware limit tied to the actual Gemini model's context window would be more precise
