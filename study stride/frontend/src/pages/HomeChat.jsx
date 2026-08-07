@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { askHomeChat } from '../api/homeChat';
+import AppLayout from '../components/layout/AppLayout';
 
 const SourceChip = ({ source }) => (
   <div className="px-2.5 py-1 rounded-md bg-[var(--surface-2)] border border-[var(--border)] text-xs text-[var(--text-secondary)] max-w-[220px]">
@@ -80,7 +81,8 @@ const HomeChat = () => {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-[var(--surface-0)]">
+    <AppLayout>
+    <div className="h-[calc(100vh-48px)] flex flex-col bg-[var(--surface-0)]">
       <div className="border-b border-[var(--border)] px-4 py-3 shrink-0">
         <h1 className="text-sm font-semibold text-[var(--text-primary)]">Ask Anything</h1>
         <p className="text-xs text-[var(--text-muted)] mt-0.5">Ask about any topic or material you've uploaded — answers are pulled from everything you own.</p>
@@ -117,6 +119,7 @@ const HomeChat = () => {
         </div>
       </div>
     </div>
+    </AppLayout>
   );
 };
 
