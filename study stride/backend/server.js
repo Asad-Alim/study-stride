@@ -26,7 +26,7 @@ app.use('/api', apiLimiter);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/topics', require('./routes/topicRoutes'));   // NEW — multi-upload topic grouping
 app.use('/api/materials', require('./routes/materialRoutes'));
-app.use('/api/learning', require('./routes/learningRoutes'));
+// app.use('/api/learning', require('./routes/learningRoutes'));
 app.use('/api/notes', require('./routes/notesRoutes'));
 app.use('/api/flashcards', require('./routes/flashcardRoutes'));
 app.use('/api/quiz', require('./routes/quizRoutes'));

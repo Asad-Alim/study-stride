@@ -118,6 +118,13 @@ const deleteMaterial = async (req, res) => {
     }
 
     const topic = await Topic.findById(material.topicId);
+    if (!topic) {
+      // Orphaned material (its topic was already deleted some other way) —
+      // still finish deleting the material itself rather than 500ing.
+      await Chunk.deleteMany({ materialId: material._id });
+      await Material.findByIdAndDelete(material._id);
+      return res.json({ message: 'Material deleted' });
+    }
 
    // Which concept tags were introduced ONLY by this material? Keep the full
     // {tag, oneLiner} objects — before conceptIndex gets filtered below —

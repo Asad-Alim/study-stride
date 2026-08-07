@@ -6,6 +6,19 @@ const { getPendingQueue, takeBatch, advancePagesProcessed } = require('../servic
 const { embedText } = require('../services/embeddingService');
 const { searchByTopic } = require('../services/vectorSearchService');
 const { retrieveRelevantChunks } = require('../services/retrievalService');
+const { getGenerationInput } = require('../services/inputSourceService');
+
+// Both legacy one-shot functions below (generateNotes, generateAndGetNotes)
+// send the WHOLE topic in a single Gemini call rather than pulling one
+// batch off the queue. getGenerationInput keeps that call bounded the same
+// way summary/flashcards/quiz already are (raw text under ~40k chars, the
+// condensed sections/notes above it), and advancing every pending page in
+// notesPagesProcessed afterwards keeps generateNextNotesBatch/notesQueueStatus
+// from thinking none of this content was covered and regenerating it.
+const markWholeQueueProcessed = async (topicId) => {
+  const queue = await getPendingQueue(topicId, 'notesPagesProcessed');
+  if (queue.length > 0) await advancePagesProcessed({ pages: queue }, 'notesPagesProcessed');
+};
 
 const generateNotes = async (req, res) => {
   try {
@@ -13,7 +26,6 @@ const generateNotes = async (req, res) => {
 
     const page = parseInt(req.params.page) || 1;
     const existing = await Notes.findOne({ materialId: topicId, pageNumber: page, userId: req.user.id });
-    // ... and pass `pageNumber: page` to Notes.create(...)
     if (existing) return res.json(existing);
 
     const topic = await Topic.findOne({ _id: topicId, userId: req.user.id });
@@ -22,7 +34,8 @@ const generateNotes = async (req, res) => {
       return res.status(400).json({ message: 'This topic has no uploaded material yet' });
     }
 
-    const generated = await gemini.generateNotes(topic.combinedText);
+    const inputText = await getGenerationInput(topic);
+    const generated = await gemini.generateNotes(inputText);
     const notes = await Notes.create({
       materialId: topicId,
       userId: req.user.id,
@@ -30,6 +43,8 @@ const generateNotes = async (req, res) => {
       sections: generated.sections,
       status: 'draft',
     });
+
+    await markWholeQueueProcessed(topic._id);
 
     res.status(201).json(notes);
   } catch (err) {
@@ -140,7 +155,8 @@ const generateAndGetNotes = async (req, res) => {
       return res.status(400).json({ message: 'This topic has no uploaded material yet' });
     }
 
-    const generated = await gemini.generateNotes(topic.combinedText);
+    const inputText = await getGenerationInput(topic);
+    const generated = await gemini.generateNotes(inputText);
     const notes = await Notes.create({
       materialId: topicId,
       userId: req.user.id,
@@ -148,6 +164,8 @@ const generateAndGetNotes = async (req, res) => {
       sections: generated.sections,
       status: 'draft',
     });
+
+    await markWholeQueueProcessed(topic._id);
 
     res.status(201).json([notes]);
   } catch (err) {

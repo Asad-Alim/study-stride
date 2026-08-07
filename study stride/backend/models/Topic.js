@@ -1,11 +1,14 @@
 const mongoose = require('mongoose');
 
 // A Topic groups multiple uploaded Materials (PDF/DOCX/TXT) into one logical
-// chapter/subject. All AI generation (notes, sections, flashcards, quiz, etc.)
-// reads from `combinedText`, which is every linked Material's extracted text
-// concatenated together. This lets one topic span 2-3 PDFs, or have the same
-// concept's content spread across page 1 and page 9 of one PDF, without it
-// getting split apart by chunking.
+// chapter/subject. Bulk AI generation (notes, sections, flashcards, quiz,
+// summary, etc.) reads from `combinedText`, which is every linked Material's
+// extracted text concatenated together — this lets one topic span 2-3 PDFs
+// without a concept getting split across files for those calls. Single-answer
+// grounded tasks (chat, quiz evaluation, notes editing) instead retrieve
+// relevant Chunks via RAG rather than reading combinedText directly.
+
+
 const topicSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   title: { type: String, required: true },

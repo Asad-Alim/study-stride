@@ -30,7 +30,7 @@ const Notes = () => {
         if (res.data.length === 0) {
           // Auto-generate if none exist
           try {
-            const gen = await api.post(`/notes/${materialId}/page/1/generate`);
+            const gen = await api.post(`/notes/${materialId}/generate-next-batch`);
             setAllNotes([gen.data]);
           } catch (e) {
             setAllNotes([]);

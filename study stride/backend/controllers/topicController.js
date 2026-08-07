@@ -46,8 +46,12 @@ const deleteTopic = async (req, res) => {
     if (!topic) return res.status(404).json({ message: 'Topic not found' });
 
     const materials = await Material.find({ topicId: topic._id });
-    const materialIds = materials.map(m => m._id);
-    const quizzes = await Quiz.find({ materialId: { $in: materialIds } });
+    // Quiz/Evaluation/GeneratedContent/Flashcard all store the TOPIC's id in
+    // their `materialId` field, not the underlying Material's id (see the
+    // comment in flashcardController.js) — filtering by { $in: materialIds }
+    // here was matching nothing, silently orphaning every quiz, evaluation,
+    // flashcard set, and generated summary/revision/cheatsheet on delete.
+    const quizzes = await Quiz.find({ materialId: topic._id });
     const quizIds = quizzes.map(q => q._id);
 
     // 1. Cloudinary files first — log failures instead of losing track of
@@ -63,11 +67,12 @@ const deleteTopic = async (req, res) => {
     }
 
     // 2. DB documents, in dependency order.
+    // 2. DB documents, in dependency order.
     await QuizAttempt.deleteMany({ quizId: { $in: quizIds } });
-    await Quiz.deleteMany({ materialId: { $in: materialIds } });
-    await Evaluation.deleteMany({ materialId: { $in: materialIds } });
-    await GeneratedContent.deleteMany({ materialId: { $in: materialIds } });
-    await Flashcard.deleteMany({ materialId: { $in: materialIds } });
+    await Quiz.deleteMany({ materialId: topic._id });
+    await Evaluation.deleteMany({ materialId: topic._id });
+    await GeneratedContent.deleteMany({ materialId: topic._id });
+    await Flashcard.deleteMany({ materialId: topic._id });
     await ConceptSection.deleteMany({ topicId: topic._id });
     await Chunk.deleteMany({ topicId: topic._id });
     await Material.deleteMany({ topicId: topic._id });

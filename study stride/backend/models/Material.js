@@ -2,8 +2,9 @@ const mongoose = require('mongoose');
 
 // One uploaded file (PDF/DOCX/TXT). Multiple Materials can belong to the
 // same Topic — that's how a topic supports multiple uploads.
-// totalPages / pagesUnderstood / Chunk fields removed: chunking is no
-// longer used, full extractedText goes to Gemini instead.
+// totalPages / pagesUnderstood fields track per-file progress; Chunk
+// documents (see models/Chunk.js) are still actively created per material
+// for RAG retrieval — chunking was never removed, only extractedText was.
 // extractedText itself was removed (Aug 2026) — it was a full duplicate of
 // pages[].text joined together. Use joinedMaterialText(material) instead.
 const materialSchema = new mongoose.Schema({
