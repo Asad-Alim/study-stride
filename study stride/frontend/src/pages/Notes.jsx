@@ -7,11 +7,23 @@ import Button from '../components/common/Button';
 import Loader from '../components/common/Loader';
 
 const Notes = () => {
-  const { materialId } = useParams();
+  const { materialId } = useParams(); // this is actually the topicId
   const navigate = useNavigate();
   const [allNotes, setAllNotes] = useState([]);
   const [loading, setLoading] = useState(true);
-  
+  const [hasMore, setHasMore] = useState(false);
+  const [generatingMore, setGeneratingMore] = useState(false);
+  const [generateError, setGenerateError] = useState('');
+
+  const refreshQueueStatus = async () => {
+    try {
+      const res = await api.get(`/notes/${materialId}/queue-status`);
+      setHasMore(res.data.hasMore);
+    } catch {
+      // non-critical — button just won't show if this fails
+    }
+  };
+
   useEffect(() => {
     api.get(`/notes/${materialId}/all`)
       .then(async res => {
@@ -26,15 +38,10 @@ const Notes = () => {
         } else {
           setAllNotes(res.data);
         }
+        await refreshQueueStatus();
       })
       .finally(() => setLoading(false));
   }, [materialId]);
-
-//   useEffect(() => {
-//     api.get(`/notes/${materialId}/all`)
-//       .then(res => setAllNotes(res.data))
-//       .finally(() => setLoading(false));
-//   }, [materialId]);
 
   const handleApprove = async (notesId) => {
     const res = await api.put(`/notes/${notesId}/approve`);
@@ -49,6 +56,33 @@ const Notes = () => {
   const handleRegenerate = async (notesId, idx, feedback) => {
     const res = await api.post(`/notes/${notesId}/section/${idx}/regenerate`, { feedback });
     setAllNotes(n => n.map(notes => notes._id === notesId ? res.data : notes));
+  };
+
+  // Item 10/11 — pull the next batch of notes off the queue. When
+  // includeLearning is true, also advances the (independent) learning
+  // sections queue for this topic, so "Notes + Learning" mode keeps both
+  // in sync from one click.
+  const handleGenerateMore = async (includeLearning) => {
+    setGeneratingMore(true);
+    setGenerateError('');
+    try {
+      const notesRes = await api.post(`/notes/${materialId}/generate-next-batch`);
+      setAllNotes(n => [...n, notesRes.data]);
+      if (includeLearning) {
+        await api.post(`/topics/${materialId}/sections/generate-next`).catch(() => {
+          // Learning-side failure shouldn't block the notes that already succeeded.
+        });
+      }
+      await refreshQueueStatus();
+    } catch (err) {
+      if (err.response?.data?.code === 'GEMINI_UNAVAILABLE') {
+        setGenerateError('AI generation is temporarily unavailable — please try again.');
+      } else {
+        setGenerateError(err.response?.data?.message || 'Something went wrong generating more notes.');
+      }
+    } finally {
+      setGeneratingMore(false);
+    }
   };
 
   if (loading) return <AppLayout><Loader /></AppLayout>;
@@ -93,6 +127,23 @@ const Notes = () => {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Item 11 — continue generating from where the queue left off */}
+        {hasMore && (
+          <div className="mt-8 border border-[var(--border)] rounded-xl p-5 bg-[var(--surface-0)]">
+            <p className="text-sm text-[var(--text-primary)] mb-1">There's more material to turn into notes.</p>
+            <p className="text-xs text-[var(--text-muted)] mb-4">Pick how you'd like to continue.</p>
+            {generateError && <p className="text-xs text-red-600 mb-3">{generateError}</p>}
+            <div className="flex gap-2">
+              <Button loading={generatingMore} onClick={() => handleGenerateMore(false)}>
+                Continue Notes only
+              </Button>
+              <Button variant="outline" loading={generatingMore} onClick={() => handleGenerateMore(true)}>
+                Continue Notes + Learning
+              </Button>
+            </div>
           </div>
         )}
       </div>

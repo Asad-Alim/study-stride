@@ -27,6 +27,8 @@ const TopicFiles = () => {
 
   useEffect(() => { loadTopic(); }, [topicId]);
 
+  const [showAddedPopup, setShowAddedPopup] = useState(false);
+
   const handleUpload = async () => {
     if (newFiles.length === 0) return;
     setUploading(true);
@@ -35,6 +37,10 @@ const TopicFiles = () => {
       await addFilesToTopic(topicId, newFiles);
       setNewFiles([]);
       loadTopic();
+      // Item 12/13 — one-time heads-up. No numbers: the queue mechanism
+      // already absorbs these pages without touching anything already
+      // generated, so there's nothing to quantify here, just to acknowledge.
+      setShowAddedPopup(true);
     } catch (err) {
       setError(err.response?.data?.message || 'Upload failed');
     } finally {
@@ -69,6 +75,15 @@ const TopicFiles = () => {
 
         {error && (
           <div className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md mb-4">{error}</div>
+        )}
+
+        {showAddedPopup && (
+          <div className="flex items-center justify-between text-xs bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 mb-4">
+            <span className="text-blue-800 dark:text-blue-300">
+              New material added — it'll be included next time you generate more notes or learning content. Nothing already generated was touched.
+            </span>
+            <button onClick={() => setShowAddedPopup(false)} className="text-blue-600 dark:text-blue-400 ml-3 shrink-0">✕</button>
+          </div>
         )}
 
         {/* Uploaded files list */}

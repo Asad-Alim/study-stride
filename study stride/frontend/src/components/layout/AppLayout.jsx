@@ -71,8 +71,8 @@ const TopBar = ({ sidebarWidth }) => {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const handleLogout = () => { logout(); navigate('/login'); };
-
+  const handleLogout = async () => { await logout(); navigate('/login'); };
+  
   return (
     <div
       className="fixed top-0 right-0 z-30 flex items-center justify-end gap-2 px-4 h-12 border-b border-[var(--border)] bg-[var(--surface-0)]"

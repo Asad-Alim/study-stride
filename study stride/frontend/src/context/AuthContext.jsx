@@ -46,18 +46,16 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
       return;
     }
-    const token = localStorage.getItem('ss_token');
-    if (token) {
-      api.get('/auth/me')
-        .then(res => {
-          setUser(res.data);
-          if (shouldPromptClassUpgrade(res.data)) setShowUpgradePrompt(true);
-        })
-        .catch(() => localStorage.removeItem('ss_token'))
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+    // Auth now lives in an httpOnly cookie, invisible to JS — there's no
+    // token to check for anymore, so just ask /auth/me and treat a 401 as
+    // "not logged in" rather than gating the call on a stored token.
+    api.get('/auth/me')
+      .then(res => {
+        setUser(res.data);
+        if (shouldPromptClassUpgrade(res.data)) setShowUpgradePrompt(true);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const saveUser = (u) => {
@@ -73,7 +71,6 @@ export const AuthProvider = ({ children }) => {
       return;
     }
     const res = await api.post('/auth/login', { email, password });
-    localStorage.setItem('ss_token', res.data.token);
     setUser(res.data.user);
     if (shouldPromptClassUpgrade(res.data.user)) setShowUpgradePrompt(true);
   };
@@ -86,14 +83,25 @@ export const AuthProvider = ({ children }) => {
       return;
     }
     const res = await api.post('/auth/register', { name, email, password, ...profile });
-    localStorage.setItem('ss_token', res.data.token);
     setUser(res.data.user);
   };
 
-  const logout = () => {
-    localStorage.removeItem('ss_token');
+  const logout = async () => {
+    if (!MOCK_MODE) {
+      await api.post('/auth/logout').catch(() => {}); // clears the httpOnly cookie server-side
+    }
     localStorage.removeItem('ss_mock_user');
     setUser(null);
+  };
+
+  // Invalidate every OTHER logged-in session (design doc item 4).
+  const logoutOthers = async () => {
+    await api.post('/auth/logout-others');
+  };
+
+  // Change password while logged in (design doc item 2).
+  const changePassword = async (currentPassword, newPassword) => {
+    await api.put('/auth/change-password', { currentPassword, newPassword });
   };
 
   // Called when user confirms class upgrade in the popup
@@ -134,6 +142,7 @@ export const AuthProvider = ({ children }) => {
     <AuthContext.Provider value={{
       user, loading, login, register, logout, updateProfile,
       showUpgradePrompt, upgradeClass, dismissUpgrade,
+      changePassword, logoutOthers,
     }}>
       {children}
     </AuthContext.Provider>

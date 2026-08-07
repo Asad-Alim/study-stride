@@ -18,7 +18,7 @@ const CLASS_OPTIONS = [
 ];
 
 const Profile = () => {
-  const { user, updateProfile, logout } = useAuth();
+  const { user, updateProfile, logout, changePassword, logoutOthers } = useAuth();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
@@ -28,6 +28,16 @@ const Profile = () => {
   });
   const [saved, setSaved] = useState(false);
   const photoRef = useRef();
+
+  // --- Change password (item 2) ---
+  const [pwForm, setPwForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwError, setPwError] = useState('');
+  const [pwSuccess, setPwSuccess] = useState(false);
+
+  // --- Log out other devices (item 4) ---
+  const [loggingOutOthers, setLoggingOutOthers] = useState(false);
+  const [logoutOthersDone, setLogoutOthersDone] = useState(false);
 
   const handlePhoto = (e) => {
     const file = e.target.files[0];
@@ -42,6 +52,48 @@ const Profile = () => {
     setEditing(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPwError('');
+    if (pwForm.newPassword !== pwForm.confirmPassword) {
+      setPwError('New passwords do not match');
+      return;
+    }
+    if (pwForm.newPassword.length < 6) {
+      setPwError('New password must be at least 6 characters');
+      return;
+    }
+    setPwSaving(true);
+    try {
+      await changePassword(pwForm.currentPassword, pwForm.newPassword);
+      setPwForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      setPwSuccess(true);
+      setTimeout(() => setPwSuccess(false), 3000);
+    } catch (err) {
+      setPwError(err.response?.data?.message || 'Could not change password');
+    } finally {
+      setPwSaving(false);
+    }
+  };
+
+  const handleLogoutOthers = async () => {
+    setLoggingOutOthers(true);
+    try {
+      await logoutOthers();
+      setLogoutOthersDone(true);
+      setTimeout(() => setLogoutOthersDone(false), 3000);
+    } catch {
+      // non-critical — just leave the button available to retry
+    } finally {
+      setLoggingOutOthers(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
   };
 
   return (
@@ -148,6 +200,70 @@ const Profile = () => {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Security section — change password + log out other devices (items 2, 4) */}
+        <div className="bg-[var(--surface-0)] border border-[var(--border)] rounded-2xl p-6 space-y-5 mt-6">
+          <h2 className="text-sm font-semibold text-[var(--text-secondary)]">Security</h2>
+
+          <form onSubmit={handleChangePassword} className="space-y-3">
+            <div>
+              <label className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider">Current password</label>
+              <input
+                type="password"
+                value={pwForm.currentPassword}
+                onChange={e => setPwForm(f => ({ ...f, currentPassword: e.target.value }))}
+                className="mt-1 w-full border border-[var(--border)] rounded-xl bg-[var(--surface-1)] text-[var(--text-primary)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--accent)]"
+                required
+              />
+            </div>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider">New password</label>
+                <input
+                  type="password"
+                  value={pwForm.newPassword}
+                  onChange={e => setPwForm(f => ({ ...f, newPassword: e.target.value }))}
+                  className="mt-1 w-full border border-[var(--border)] rounded-xl bg-[var(--surface-1)] text-[var(--text-primary)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--accent)]"
+                  required
+                  minLength={6}
+                />
+              </div>
+              <div className="flex-1">
+                <label className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider">Confirm new password</label>
+                <input
+                  type="password"
+                  value={pwForm.confirmPassword}
+                  onChange={e => setPwForm(f => ({ ...f, confirmPassword: e.target.value }))}
+                  className="mt-1 w-full border border-[var(--border)] rounded-xl bg-[var(--surface-1)] text-[var(--text-primary)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--accent)]"
+                  required
+                  minLength={6}
+                />
+              </div>
+            </div>
+            {pwError && <p className="text-xs text-red-600">{pwError}</p>}
+            <div className="flex items-center gap-3 pt-1">
+              <Button type="submit" loading={pwSaving}>Change password</Button>
+              {pwSuccess && <span className="text-xs text-green-600">✓ Password changed</span>}
+            </div>
+          </form>
+
+          <hr className="border-[var(--border)]" />
+
+          <div>
+            <p className="text-sm text-[var(--text-primary)] mb-1">Log out other devices</p>
+            <p className="text-xs text-[var(--text-muted)] mb-3">This signs you out everywhere except this device.</p>
+            <div className="flex items-center gap-3">
+              <Button variant="outline" loading={loggingOutOthers} onClick={handleLogoutOthers}>
+                Log out other devices
+              </Button>
+              {logoutOthersDone && <span className="text-xs text-green-600">✓ Done</span>}
+            </div>
+          </div>
+
+          <hr className="border-[var(--border)]" />
+
+          <Button variant="outline" onClick={handleLogout}>Log out</Button>
         </div>
       </div>
     </AppLayout>

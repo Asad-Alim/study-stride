@@ -114,18 +114,25 @@ const Flashcards = () => {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     api.get(`/flashcards/${materialId}`)
       .then(res => setCards(res.data))
       .finally(() => setLoading(false));
+    // Item 14 — cheap check, safe on mount.
+    api.get(`/flashcards/${materialId}/stale-check`)
+      .then(res => setStale(res.data.stale))
+      .catch(() => {});
   }, [materialId]);
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (force = false) => {
     setGenerating(true);
     try {
-      const res = await api.post(`/flashcards/${materialId}/generate`);
+      const url = force ? `/flashcards/${materialId}/generate?force=true` : `/flashcards/${materialId}/generate`;
+      const res = await api.post(url);
       setCards(res.data);
+      setStale(false);
     } catch (err) {
       console.error('Generate flashcards failed', err);
     } finally {
@@ -153,9 +160,19 @@ const Flashcards = () => {
           </div>
         </div>
           {cards.length === 0 && (
-            <Button loading={generating} onClick={handleGenerate}>Generate Flashcards</Button>
+            <Button loading={generating} onClick={() => handleGenerate(false)}>Generate Flashcards</Button>
           )}
         </div>
+      
+
+      {cards.length > 0 && stale && (
+        <div className="mb-4 flex items-center justify-between text-xs bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+          <span className="text-amber-800 dark:text-amber-300">New material was added since these were generated.</span>
+          <Button size="sm" variant="outline" loading={generating} onClick={() => handleGenerate(true)}>
+            Regenerate
+          </Button>
+        </div>
+      )}
 
         {cards.length === 0 ? (
           <p className="text-sm text-[var(--text-muted)]">No flashcards yet. Complete the chapter and generate them.</p>

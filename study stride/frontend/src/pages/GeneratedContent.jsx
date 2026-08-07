@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 import AppLayout from '../components/layout/AppLayout';
@@ -25,6 +25,7 @@ const GeneratedContent = () => {
   const [active, setActive] = useState(null);
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(null);
+  const [stale, setStale] = useState({});
 
   const endpoints = {
     summary: `/generate/${materialId}/summary`,
@@ -32,39 +33,28 @@ const GeneratedContent = () => {
     cheatsheet: `/generate/${materialId}/cheatsheet`,
   };
 
-//   const load = async (type) => {
-//     if (data[type]) return setActive(type);
-//     setLoading(type);
-//     const res = await api.get(endpoints[type]);
-//     setData(d => ({ ...d, [type]: res.data.content }));
-//     setActive(type);
-//     setLoading(null);
-//   };
-  const MOCK_DATA = {
-    summary: {
-      keyConcepts: ['OSI model has 7 layers', 'Each layer has a specific role', 'Layers communicate with adjacent layers only'],
-      importantDefinitions: [{ term: 'OSI', definition: 'Open Systems Interconnection — a framework for network protocols' }, { term: 'Protocol', definition: 'A set of rules governing data communication' }],
-      examPoints: ['Know all 7 layer names in order', 'Physical layer = bits, Data Link = frames, Network = packets', 'Transport layer uses TCP (reliable) or UDP (fast)'],
-    },
-    revision: {
-      quickRevision: ['Layer 1 Physical — bits, cables, hubs', 'Layer 2 Data Link — frames, switches, MAC', 'Layer 3 Network — packets, routers, IP', 'Layer 4 Transport — TCP/UDP, ports', 'Layer 5-7 Session, Presentation, Application'],
-      formulaSheet: ['Mnemonic: Please Do Not Throw Sausage Pizza Away (bottom to top)'],
-      lastMinuteConcepts: ['Routers work at Layer 3', 'Switches at Layer 2', 'HTTP/HTTPS at Layer 7'],
-    },
-    cheatsheet: {
-      keywords: ['Encapsulation', 'Protocol', 'MAC Address', 'IP Address', 'Port', 'Socket'],
-      formulae: [{ term: 'Data unit at Layer 2', definition: 'Frame' }, { term: 'Data unit at Layer 3', definition: 'Packet' }, { term: 'Data unit at Layer 4', definition: 'Segment' }],
-      memoryTricks: ['All People Seem To Need Data Processing (top to bottom)', 'Each layer adds its own header during encapsulation'],
-    },
+  // Item 14 — check which cached artifacts have new material since they
+  // were generated. Cheap (no Gemini call), safe to call on mount.
+  const refreshStale = async () => {
+    try {
+      const res = await api.get(`/generate/${materialId}/stale-check`);
+      setStale(res.data);
+    } catch {
+      // non-critical
+    }
   };
 
-   const load = async (type) => {
-    if (data[type]) return setActive(type);
+  useEffect(() => { refreshStale(); }, [materialId]);
+
+  const load = async (type, force = false) => {
+    if (data[type] && !force) return setActive(type);
     setLoading(type);
     try {
-      const res = await api.get(endpoints[type]);
+      const url = force ? `${endpoints[type]}?force=true` : endpoints[type];
+      const res = await api.get(url);
       setData(d => ({ ...d, [type]: res.data.content }));
       setActive(type);
+      setStale(s => ({ ...s, [type]: false }));
     } catch (err) {
       console.error('Failed to load', type, err);
     } finally {
@@ -143,6 +133,18 @@ const GeneratedContent = () => {
             </Button>
           ))}
         </div>
+
+        {active && stale[active] && (
+          <div className="mb-4 flex items-center justify-between text-xs bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+            <span className="text-amber-800 dark:text-amber-300">New material was added since this was generated.</span>
+            <button
+              onClick={() => load(active, true)}
+              className="font-medium text-amber-900 dark:text-amber-200 underline shrink-0 ml-3"
+            >
+              Regenerate
+            </button>
+          </div>
+        )}
 
         {active && (
           <div className="bg-[var(--surface-0)] border border-[var(--border)] rounded-xl p-6">

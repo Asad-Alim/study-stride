@@ -15,12 +15,18 @@ const Quiz = () => {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [evalLoading, setEvalLoading] = useState(false);
+  const [stale, setStale] = useState(false);
 
   useEffect(() => {
     api.get(`/quiz/${materialId}`)
       .then(res => setQuiz(res.data))
       .catch(() => {})
       .finally(() => setLoading(false));
+    // Item 14 — cheap check, safe on mount. generateQuiz already
+    // deletes+regenerates every call, so this is purely informational.
+    api.get(`/quiz/${materialId}/stale-check`)
+      .then(res => setStale(res.data.stale))
+      .catch(() => {});
   }, [materialId]);
 
   const handleGenerate = async () => {
@@ -28,6 +34,10 @@ const Quiz = () => {
     try {
       const res = await api.post(`/quiz/${materialId}/generate`);
       setQuiz(res.data);
+      setStale(false);
+      setSubmitted(false);
+      setAnswers({});
+      setEvaluation(null);
     } catch (err) {
       console.error('Generate quiz failed', err);
     } finally {
@@ -75,6 +85,16 @@ const Quiz = () => {
           </div>
           {!quiz && <Button loading={generating} onClick={handleGenerate}>Generate Quiz</Button>}
         </div>
+
+        {quiz && stale && (
+          <div className="mb-4 flex items-center justify-between text-xs bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+            <span className="text-amber-800 dark:text-amber-300">New material was added since this quiz was generated.</span>
+            <Button size="sm" variant="outline" loading={generating} onClick={handleGenerate}>
+              Regenerate
+            </Button>
+          </div>
+        )}
+      </div>
 
         {!quiz ? (
           <p className="text-sm text-[var(--text-muted)]">No quiz yet. Complete the chapter and generate one.</p>
