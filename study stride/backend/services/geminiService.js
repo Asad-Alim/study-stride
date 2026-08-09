@@ -294,11 +294,17 @@ Generate 3-6 concise, exam-focused sections.`;
   return safeParseJSON(raw, 'notesFromChat');
 };
 
- const chatWithSection = async (sectionContent, chatHistory, userMessage, declaredLevel, strictMode = true) => {
+ const chatWithSection = async (sectionContent, chatHistory, userMessage, declaredLevel, strictMode = true, noRelevantContext = false) => {
   const history = chatHistory.map(m => `${m.role === 'user' ? 'Student' : 'AI'}: ${m.message || m.content}`).join('\n');
-  const strictInstruction = strictMode
-    ? 'STRICT MODE: Answer ONLY using the section content provided below. Do not bring in outside knowledge. If the student asks something the section content does not cover or contradicts, say so explicitly (e.g. "This isn\'t covered in the provided material.") instead of guessing or filling the gap from general knowledge.'
-    : 'Use the section content as the primary source. You may use your broader knowledge to clarify or fill gaps — but if you do, make clear which parts come from the material and which are your own addition.';
+
+  let strictInstruction;
+  if (noRelevantContext) {
+    strictInstruction = 'No passage in the student\'s uploaded material matched this question closely enough to use as context (SECTION BEING STUDIED below is empty). Tell the student briefly, in one short sentence, that you couldn\'t find anything relevant in their notes for this — then answer the question yourself using your own general knowledge, concisely. Do not pretend the answer came from their material.';
+  } else if (strictMode) {
+    strictInstruction = 'STRICT MODE: Answer ONLY using the section content provided below. Do not bring in outside knowledge. If the student asks something the section content does not cover or contradicts, say so explicitly (e.g. "This isn\'t covered in the provided material.") instead of guessing or filling the gap from general knowledge.';
+  } else {
+    strictInstruction = 'Use the section content as the primary source. You may use your broader knowledge to clarify or fill gaps — but if you do, make clear which parts come from the material and which are your own addition.';
+  }
 
   const prompt = `You are a helpful AI tutor explaining a concept to a student at level: "${declaredLevel || 'General'}".
 
@@ -313,6 +319,61 @@ ${history}
 STUDENT NOW ASKS: ${userMessage}
 
 Respond helpfully with examples and analogies suited to their level. Be conversational.`;
+  return generate(prompt);
+};
+
+// Section-scoped chat with subject-relevance judgment baked into the prompt.
+// Unlike chatWithSection (used only by home chat, which is deliberately
+// unscoped, and always gets '' for sectionContent there), this NEVER sends
+// section.rawContent — it's Gemini-generated, not source material, and has
+// no size cap. Grounding comes only from retrievedContext (real, retrieved
+// chunks) when present, and conceptIndex (cheap one-liner tags) is always
+// included as the topic's scope reference either way.
+const chatWithSectionScoped = async ({
+  retrievedContext,   // string | null — reranked chunks from this topic, or null if nothing cleared the threshold
+  conceptIndex,       // [{ tag, oneLiner }] — everything taught so far in this topic; the scope reference
+  chatHistory,
+  userMessage,
+  declaredLevel,
+  strictMode,
+}) => {
+  const history = chatHistory.map(m => `${m.role === 'user' ? 'Student' : 'AI'}: ${m.message || m.content}`).join('\n');
+
+  const conceptList = (conceptIndex && conceptIndex.length > 0)
+    ? conceptIndex.map(c => `- ${c.tag}: ${c.oneLiner}`).join('\n')
+    : '(no concepts recorded yet for this topic)';
+
+  const groundingBlock = retrievedContext
+    ? `RETRIEVED MATERIAL (actual source content relevant to this question):\n${retrievedContext}`
+    : 'No passage in this topic\'s uploaded material matched this question closely enough to retrieve. You only have the concept list below to judge scope — no source text to quote or ground an answer in.';
+
+  const modeInstruction = strictMode
+    ? `STRICT MODE — follow these rules exactly, in order:
+1. You may ONLY use facts found in "RETRIEVED MATERIAL" below, if present. Never answer using your own outside knowledge, even if you're confident you know the answer.
+2. First, silently judge whether the question falls within what this topic covers, using "CONCEPTS TAUGHT SO FAR" as your reference for the topic's scope. A question about a closely related concept, sub-topic, or adjacent event within that same scope still counts as in-scope. Example: if the concepts taught are about WWII, a question about WWI is in-scope. A question about an unrelated period (e.g. the Mughal Empire) or unrelated subject (e.g. biology) is NOT in-scope.
+3. If in-scope but RETRIEVED MATERIAL is empty or doesn't actually answer it, say plainly that it isn't covered in the uploaded material yet. Do not guess, and do not fill the gap from general knowledge.
+4. If NOT in-scope at all, say plainly that the question is off-topic for what's currently being studied, and briefly name what the topic actually covers (from CONCEPTS TAUGHT SO FAR). Do not attempt to answer it, even partially.`
+    : `NON-STRICT MODE — follow these rules exactly, in order:
+1. Prefer "RETRIEVED MATERIAL" below as your primary source, if present. Where it's thin, empty, or silent on specifics, you may supplement with your own general knowledge to answer more completely — but make clear which parts of your answer come from the material and which are your own addition.
+2. First, silently judge whether the question stays within the same broad subject/domain as this topic, using "CONCEPTS TAUGHT SO FAR" as your reference. This is a looser check than strict mode — the exact sub-topic doesn't need to be covered, just the general subject area. Example: if the concepts taught are about one war, a question about a different but related war or era is still the same subject and should be answered, using general knowledge if needed. A question about a completely different subject (e.g. history vs biology) is NOT the same domain.
+3. If the question is a genuinely different subject/domain than this topic, say plainly that it's off-topic for what's currently being studied. Do not attempt to answer it at all, even from general knowledge.`;
+
+  const prompt = `You are a helpful AI tutor helping a student study a specific topic, at level: "${declaredLevel || 'General'}".
+
+${modeInstruction}
+
+CONCEPTS TAUGHT SO FAR IN THIS TOPIC:
+${conceptList}
+
+${groundingBlock}
+
+CONVERSATION SO FAR:
+${history}
+
+STUDENT NOW ASKS: ${userMessage}
+
+If you're answering (not refusing as off-topic or uncovered), respond conversationally, with examples/analogies suited to their level.`;
+
   return generate(prompt);
 };
 
@@ -462,6 +523,7 @@ module.exports = {
   evaluateAnswer,
   splitIntoLearningSections,
   chatWithSection,
+  chatWithSectionScoped,
   generateNotesFromChat,
   generateNotesFromLearning,
   updateNotesFromInstruction,

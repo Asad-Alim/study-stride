@@ -109,31 +109,34 @@ const chat = async (req, res) => {
     const section = await ConceptSection.findOne({ _id: req.params.id, userId: req.user.id });
     if (!section) return res.status(404).json({ message: 'Section not found' });
 
-    // backend/controllers/sectionController.js, line 5 — DELETE this line:
-    // const user = await User.findById(req.user.id);
-    // const topic = await Topic.findById(section.materialId);
-
-const chunkCount = await Chunk.countDocuments({ topicId: section.topicId });
-     let contextContent = section.rawContent;
+    // section.rawContent is itself Gemini-generated (see generateBatchSections),
+    // not raw source material, and can be arbitrarily large with no cap — never
+    // send it to Gemini here. Ground answers only in retrieved chunks (built
+    // from the real Material.pages at ingestion), falling back to the topic's
+    // conceptIndex one-liners as a scope reference when nothing retrieves.
+    const chunkCount = await Chunk.countDocuments({ topicId: section.topicId });
+    let retrievedContext = null;
     if (chunkCount > 0) {
       const queryEmbedding = await embedText(message, 'RETRIEVAL_QUERY');
-       const results = await retrieveRelevantChunks(searchByTopic, section.topicId, queryEmbedding, message);
-       if (results.length > 0) {
-        contextContent = results.map(r => r.text).join('\n\n---\n\n');
+      const results = await retrieveRelevantChunks(searchByTopic, section.topicId, queryEmbedding, message);
+      if (results.length > 0) {
+        retrievedContext = results.map(r => r.text).join('\n\n---\n\n');
       }
     }
 
-    // strictMode lives on the Topic, not the section — one small lookup here
-    // keeps chat consistent with whatever the student has toggled for this topic.
-    const topic = await Topic.findById(section.topicId).select('strictMode');
+    // strictMode + conceptIndex live on the Topic, not the section — one
+    // lookup here keeps chat consistent with the student's toggle and gives
+    // the model the topic's full taught scope, not just this one section.
+    const topic = await Topic.findById(section.topicId).select('strictMode conceptIndex');
 
-    const answer = await gemini.chatWithSection(
-      contextContent,
-      section.chatHistory,
-      message,
-      req.user.declaredLevel,   // already in token payload — no extra DB fetch needed
-      topic ? topic.strictMode : true
-    );
+    const answer = await gemini.chatWithSectionScoped({
+      retrievedContext,
+      conceptIndex: topic ? topic.conceptIndex : [],
+      chatHistory: section.chatHistory,
+      userMessage: message,
+      declaredLevel: req.user.declaredLevel,
+      strictMode: topic ? topic.strictMode !== false : true,
+    });
 
     section.chatHistory.push({ role: 'user', message });
     section.chatHistory.push({ role: 'ai', message: answer });

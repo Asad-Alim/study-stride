@@ -1,4 +1,5 @@
 const Topic = require('../models/Topic');
+const Chunk = require('../models/Chunk');
 const { embedText } = require('../services/embeddingService');
 const { searchByUser } = require('../services/vectorSearchService');
 const { retrieveRelevantChunks } = require('../services/retrievalService');
@@ -9,11 +10,26 @@ const askHomeChat = async (req, res) => {
     const { question } = req.body;
     if (!question) return res.status(400).json({ message: 'question is required' });
 
+    // True cold start — nothing indexed for this user at all. Only case where
+    // we block outright: Study Stride is a study-material chatbot, not a
+    // general-purpose one, so there's nothing to ground an answer in yet.
+    const totalChunks = await Chunk.countDocuments({ userId: req.user.id });
+    if (totalChunks === 0) {
+      return res.json({
+        answer: "You haven't uploaded any study material yet, so there's nothing for me to answer from. Add some material to a topic first, then come back and ask away.",
+        sources: [],
+      });
+    }
+
     const queryEmbedding = await embedText(question, 'RETRIEVAL_QUERY');
     const results = await retrieveRelevantChunks(searchByUser, req.user.id, queryEmbedding, question);
-    
+
+    // Chunks exist somewhere for this user, just none relevant to this
+    // specific question — still answer, but tell Gemini there's no
+    // grounding so it doesn't pretend the answer came from the student's notes.
     if (results.length === 0) {
-      return res.json({ answer: "You don't have any indexed material yet to answer this from.", sources: [] });
+      const answer = await gemini.chatWithSection('', [], question, req.user.declaredLevel, false, true);
+      return res.json({ answer, sources: [] });
     }
 
     const topicIds = [...new Set(results.map(r => String(r.topicId)))];
