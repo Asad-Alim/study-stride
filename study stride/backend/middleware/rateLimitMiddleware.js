@@ -1,4 +1,4 @@
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
 // Standard JSON response instead of the default plain-text one
 const jsonHandler = (req, res, next, options) => {
@@ -22,7 +22,7 @@ const uploadLimiter = rateLimit({
   max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.user?.id || req.ip,
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req.ip),
   message: 'Too many uploads. Please slow down and try again shortly.',
   handler: jsonHandler,
 });
@@ -32,7 +32,7 @@ const apiLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.user?.id || req.ip,
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req.ip),
   message: 'Too many requests. Please slow down.',
   handler: jsonHandler,
 });
